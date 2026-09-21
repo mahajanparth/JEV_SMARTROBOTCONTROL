@@ -1,0 +1,103 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jev • House mission</title>
+<style>
+:root{color-scheme:dark}body{margin:0;background:#101820;color:#e6edf3;font:15px system-ui}main{max-width:1200px;margin:auto;padding:24px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:25px}small,.muted{color:#9eafbe}button,input{background:#243442;border:1px solid #476174;color:#e6edf3;border-radius:6px;padding:9px;margin:4px}button{cursor:pointer}button:hover{background:#365468}.stop{background:#77363e}input{width:75px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{padding:18px;background:#192631;border:1px solid #2e414f;border-radius:10px;margin:14px 0}h2{font-size:16px;margin:0 0 12px}pre{font:12px ui-monospace,monospace;white-space:pre-wrap;overflow:auto;max-height:350px}#phase{color:#69dfc5;font-size:23px}.row{display:flex;gap:24px;flex-wrap:wrap}.pill{padding:5px 9px;background:#304453;border-radius:12px}table{width:100%;border-collapse:collapse;font-size:13px}td{padding:8px;border-bottom:1px solid #304453;vertical-align:top}#help{background:#62492a;display:none;padding:15px}canvas{width:100%;max-height:350px;background:#0f1a22}details{margin:8px 0}@media(max-width:750px){.grid{grid-template-columns:1fr}}
+
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:12px 0}.metric{background:#101c26;padding:14px;border-radius:8px;min-width:0}.metric strong{display:block;font-size:21px;margin-top:6px;overflow-wrap:anywhere}.metric small{font-size:11px;letter-spacing:.05em}.highlight{border:1px solid #4dbba8}.highlight strong{color:#73e3c9}.explanation{font-size:13px;line-height:1.5;color:#aebfca}.prob-head,.prob-row{display:grid;grid-template-columns:minmax(170px,1.1fr) minmax(130px,1.5fr) 65px minmax(145px,1fr);gap:14px;align-items:center}.prob-head{font-size:12px;color:#9eafbe;margin:22px 0 8px}.prob-row{padding:13px 10px;border-top:1px solid #304453;font-size:13px}.prob-row.winner{background:#1c383b;border-left:3px solid #63d9be}.action-name{font-weight:600}.action-code{display:block;font:10px ui-monospace,monospace;color:#8fa7b7;margin-top:3px}.bar-track{height:12px;background:#0e1a24;border-radius:6px;overflow:hidden}.bar-fill{height:100%;background:#588bc3;border-radius:6px;transition:width .25s}.winner .bar-fill{background:#63d9be}.not-offered{font-size:12px;color:#8399a9}.prob-value{font-variant-numeric:tabular-nums;text-align:right}.tag{display:inline-block;font-size:11px;padding:4px 7px;border-radius:5px;background:#293d4c;color:#bfcdd7}.tag.running{background:#315886;color:#e1efff}.tag.ready{background:#254b3e;color:#aee3c0}.tag.wait{color:#a1b0bc;background:#263541}.reject{padding:12px;background:#51383b;border-left:3px solid #e99b90;border-radius:4px;line-height:1.5}.legend{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:#b3c2cc}.top-line{display:flex;justify-content:space-between;gap:15px;align-items:center;flex-wrap:wrap}.status-value{font-size:20px;line-height:1.4;color:#9ec9ff}summary{cursor:pointer}button:disabled{opacity:.4;cursor:not-allowed}#actions{max-height:500px}.action-entry{border-top:1px solid #304453;padding:10px 0;font-size:13px}.action-entry p{margin:5px 0;color:#acbdc9}
+@media(max-width:650px){main{padding:12px}.metrics{grid-template-columns:1fr}.prob-head,.prob-row{grid-template-columns:minmax(120px,1fr) minmax(70px,1fr) 52px}.prob-head>:last-child,.prob-row>:last-child{grid-column:1/-1}.prob-head>:last-child{display:none}.action-code{font-size:9px}}
+</style></head><body><main><header><div><small>TYPE SAFE JEV / TURTLEBOT3</small><h1>House mission control</h1></div><span id="connection">Connecting…</span></header>
+<div class="card"><div class="row"><div><small>MISSION STAGE</small><div id="phase">N/A</div></div><div><small>LOCALIZATION</small><div id="health">N/A</div></div><div><small>MODEL</small><div id="model">N/A</div></div><div><small>ELAPSED</small><div id="elapsed">N/A</div></div><div><small>JEV ACTIVITY</small><div id="supervision">N/A</div><div id="supervision-detail" class="explanation" style="max-width:390px;margin-top:4px"></div></div><div><small>JEV CALLS</small><div id="calls">0</div></div></div><p id="summary"></p><label>Seed <input id="seed" type="number" value="42"></label><button onclick="send('start',{seed:Number(val('seed'))})">Start random mission</button><button class="stop" onclick="send('stop')">Stop mission</button><div id="help"><span id="helptext"></span><button onclick="send('ack')">Intervention complete: reassess</button></div></div>
+<section class="card" aria-live="polite"><div class="top-line"><h2>Jev action probabilities</h2><span class="muted" id="decision-meta">Waiting for first decision</span></div>
+<div class="metrics"><div class="metric highlight"><small>HIGHEST ACTION PROBABILITY</small><strong id="maximum">N/A</strong><span id="maximum-action" class="explanation">No decision yet</span></div><div class="metric"><small>JEV SELECTED</small><strong id="chosen">N/A</strong><span id="choice-note" class="explanation"></span></div><div class="metric"><small>MODEL CONFIDENCE</small><strong id="confidence">N/A</strong><span class="explanation">Separate from action probability</span></div></div>
+<p class="explanation">These probabilities belong to the latest reviewed Jev decision. Actions not offered in that call have no probability recorded for that call. The final column shows the robot’s current execution or availability.</p>
+<div class="prob-head"><span>Action</span><span>Probability in that call</span><span style="text-align:right">%</span><span>Robot now</span></div><div id="probabilities"></div>
+<p id="veto" class="reject" hidden></p>
+<details><summary>What each action does and why it is available</summary><div id="actions"></div></details>
+<details><summary>Raw decision</summary><pre id="decision"></pre></details></section>
+<div class="grid"><section class="card"><h2>Map / estimated pose / goal</h2><canvas id="map" width="600" height="500"></canvas><div class="legend"><span>● Teal: estimated robot pose</span><span>● Amber: destination</span><span>Blue: planned route</span></div></section>
+<section class="card"><h2>What the robot is doing</h2><div id="execution" class="status-value">Stopped</div><p id="ownership" class="explanation"></p><p class="explanation">An action already executing is not available to start again. Jev’s selected action may be rejected by local checks; selection does not guarantee execution.</p>
+<h2>Inject localization error</h2><label>ΔX m<input id="dx" type="number" value="4" step="0.1"></label><label>ΔY m<input id="dy" type="number" value="4" step="0.1"></label><label>Δyaw rad<input id="dyaw" type="number" value="1.5" step="0.1"></label><button onclick="send('inject',{dx:Number(val('dx')),dy:Number(val('dy')),dyaw:Number(val('dyaw')),variance:0.005})">Inject delocalization</button><p class="muted">Changes AMCL's estimate; the physical robot stays in place.</p><div id="command" role="status"></div></section></div>
+<div class="grid"><section class="card"><h2>Latest Jev request</h2><pre id="request">No calls yet.</pre></section><section class="card"><h2>Latest Jev response</h2><pre id="response">No response yet.</pre></section></div>
+<section class="card"><h2>Live timeline</h2><div id="timeline"></div></section></main><script>
+const $=id=>document.getElementById(id),val=id=>$(id).value,pretty=o=>JSON.stringify(o,null,2);let events=[];
+async function send(command,args={}){let r=await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command,...args})});$('command').textContent=r.ok?'Command queued; outcome will appear in the timeline.':'Command rejected.'}
+function draw(s){const c=$('map'),x=c.getContext('2d'),m=s.map;if(!m)return;x.clearRect(0,0,c.width,c.height);const scale=Math.min(c.width/(m.width*m.resolution),c.height/(m.height*m.resolution));x.fillStyle='#c9d0cd';x.fillRect(0,0,m.width*m.resolution*scale,m.height*m.resolution*scale);x.fillStyle='#263542';for(const i of m.blocked)x.fillRect(i%m.width*m.resolution*scale,c.height-(Math.floor(i/m.width)+1)*m.resolution*scale,m.resolution*scale+1,m.resolution*scale+1);function dot(p,color,r){if(!p)return;x.fillStyle=color;x.beginPath();x.arc((p[0]-m.origin[0])*scale,c.height-(p[1]-m.origin[1])*scale,r,0,7);x.fill()}dot(s.goal,'#ffbb63',8);dot(s.pose,'#008e84',6);if(s.path){x.strokeStyle='#3379c4';x.beginPath();s.path.forEach((p,i)=>{let a=(p[0]-m.origin[0])*scale,b=c.height-(p[1]-m.origin[1])*scale;i?x.lineTo(a,b):x.moveTo(a,b)});x.stroke()}}
+const actionLabels={CONTINUE_NAVIGATION:'Continue navigation',SPIN:'Spin',GLOBAL_RELOCALIZE:'Global relocalization',BACKTRACK_AND_SPIN:'Backtrack and spin',MOVE_LOCAL:'Move locally (X, Y)',NAVIGATE_TO_GOAL:'Navigate to goal',PAUSE_NAVIGATION:'Pause navigation',RESUME_NAVIGATION:'Resume navigation',REQUEST_HELP:'Request help',STOP:'Stop'};
+const label=a=>actionLabels[a]||a||'N/A';
+function currentAction(s,a){
+ if(s.phase==='EXECUTING'&&s.active_action===a)return ['Executing now','running'];
+ if(s.phase==='NAVIGATING'&&s.active_action===a)return ['Executing via Nav2','running'];
+ if(s.phase==='NAVIGATING'&&a==='CONTINUE_NAVIGATION')return ['Available for review','ready'];
+ if(s.phase==='STOPPED'&&a==='STOP')return ['Robot stopped','running'];
+ if(s.phase==='HELP'&&a==='REQUEST_HELP')return ['Waiting for you','running'];
+ if(s.action_availability?.[a]?.available)return ['Available next','ready'];
+ if(s.phase==='EXECUTING')return ['Wait for current action','wait'];
+ if(s.phase==='NAVIGATING')return ['Not offered while driving','wait'];
+ return ['Not available now','wait'];
+}
+function renderDecision(s){
+ const d=s.decision,p=d?.probabilities||{},keys=[...new Set([...Object.keys(actionLabels),...Object.keys(s.action_availability||{}),...Object.keys(p)])];
+ const offered=keys.filter(a=>Object.hasOwn(p,a)&&Number.isFinite(p[a]));
+ const max=offered.length?Math.max(...offered.map(a=>p[a])):null;
+ const winners=max===null?[]:offered.filter(a=>Math.abs(p[a]-max)<1e-9);
+ $('maximum').textContent=max===null?'N/A':(max*100).toFixed(1)+'%';
+ $('maximum-action').textContent=winners.length?winners.map(label).join(' / ')+(winners.length>1?' (tie)':''):'No response received';
+ $('chosen').textContent=label(d?.action);$('confidence').textContent=Number.isFinite(d?.confidence)?(d.confidence*100).toFixed(1)+'%':'N/A';
+ $('choice-note').textContent=d?.action==='MOVE_LOCAL'?`Target: X ${d.x_m} m, Y ${d.y_m} m`:'Chosen by Jev; checked locally before execution';
+ const response=[...(s.events||[])].reverse().find(e=>e.event==='JEV_RESPONSE'&&e.decision?.action===d?.action&&JSON.stringify(e.decision?.probabilities)===JSON.stringify(p));
+ $('decision-meta').textContent=d?[d.model,response?.call_id?'Call #'+response.call_id:null,response?.purpose?.replaceAll('_',' '),response?response.time.toFixed(1)+'s into mission':null].filter(Boolean).join(' · '):'Waiting for first decision';
+ const sorted=keys.sort((a,b)=>(Object.hasOwn(p,b)?1:0)-(Object.hasOwn(p,a)?1:0)||(p[b]||0)-(p[a]||0));
+ $('probabilities').replaceChildren(...sorted.map(a=>{
+  const has=offered.includes(a),row=document.createElement('div');row.className='prob-row'+(winners.includes(a)?' winner':'');
+  const name=document.createElement('div'),title=document.createElement('span'),code=document.createElement('span');title.className='action-name';title.textContent=label(a)+(d?.action===a?' · selected':'');code.className='action-code';code.textContent=a;name.append(title,code);
+  const bar=document.createElement('div'),value=document.createElement('span');value.className='prob-value';
+  if(has){bar.className='bar-track';bar.setAttribute('role','meter');bar.setAttribute('aria-label',label(a)+' probability');bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');bar.setAttribute('aria-valuenow',String(p[a]*100));const fill=document.createElement('div');fill.className='bar-fill';fill.style.width=(Math.max(0,Math.min(1,p[a]))*100)+'%';bar.append(fill);value.textContent=(p[a]*100).toFixed(1)+'%'}
+  else{bar.className='not-offered';bar.textContent=d?'Not offered in this call':'No decision yet';value.textContent='N/A'}
+  const status=document.createElement('span'),[text,kind]=currentAction(s,a);status.className='tag '+kind;status.textContent=text;
+  row.append(name,bar,value,status);return row;
+ }));
+ $('actions').replaceChildren(...keys.map(a=>{const box=document.createElement('div');box.className='action-entry';const title=document.createElement('strong'),description=document.createElement('p'),reason=document.createElement('p');title.textContent=label(a)+': '+currentAction(s,a)[0];description.textContent=s.action_availability?.[a]?.description||'';reason.textContent=currentAction(s,a)[1]==='running'?'This is the current action; it does not need to be started again.':s.action_availability?.[a]?.reason||'';box.append(title,description,reason);return box}));
+ $('decision').textContent=pretty(d||{});$('veto').hidden=!s.last_veto;$('veto').textContent=s.last_veto?'Last rejected decision ('+s.last_veto.time.toFixed(1)+'s): '+s.last_veto.reason:'';
+ const execution={NAVIGATING:'Following the route with Nav2',CANCELING:'Stopping: waiting for Nav2 cancellation',HELP:'Stopped: operator assistance requested',STOPPED:'Stopped',IDLE:'Idle: ready for a mission',SUCCEEDED:'Destination reached',WAITING_JEV:'Stopped: waiting for Jev',EVALUATING:'Stopped: evaluating localization',PREPARING_NAV:'Stopped: refreshing navigation maps',NAV_STARTING:'Stopped: waiting for goal acceptance',INITIALIZING:'Initializing localization',SETTING_START:'Placing the robot at its random start',PAUSED:'Navigation paused'};
+ $('execution').textContent=s.phase==='EXECUTING'?label(s.active_action):execution[s.phase]||s.phase||'Starting';
+ $('ownership').textContent={NAV:'Motion owner: Nav2. Jev supervises its navigation decisions.',RECOVERY:'Motion owner: recovery controller. It executes the approved Jev action.',NONE:'Motion owner: none. Movement commands are disabled.'}[s.owner]||'Waiting for controller status';
+}
+function jevActivity(s){
+ if(s.phase==='NAVIGATING'){
+  const v=s.supervision||{},rate=`Target ${v.target_hz||5} Hz · sent ${(v.observed_request_hz||0).toFixed(1)} Hz`;
+  return ['Monitoring navigation',rate+(v.status==='BACKPRESSURE'?' · waiting for API capacity':v.pending?' · review responses pending':'')];
+ }
+ const stages={
+  EXECUTING:['Executing Jev decision: '+label(s.active_action),'Local safety checks remain active. No periodic Jev requests during recovery.'],
+  EVALUATING:['Evaluating recovery locally','No periodic Jev requests. The next decision request follows evaluation.'],
+  WAITING_JEV:['Waiting for a Jev decision','One decision request is in progress; the robot remains stopped.'],
+  DECIDING:['Preparing the next Jev request','The controller checks the latest evidence and available actions.'],
+  CANCELING:['Stopping navigation','The next decision follows confirmation that Nav2 has stopped.'],
+  PREPARING_NAV:['Preparing Jev-selected navigation','Periodic reviews begin when Nav2 starts navigating.'],
+  NAV_STARTING:['Starting Jev-selected navigation','Periodic reviews begin when Nav2 accepts the goal.'],
+  PAUSED:['Paused by Jev','The next decision request follows the pause.'],
+  INITIALIZING:['Preparing localization','Jev will choose an action when initial observations are ready.'],
+  SETTING_START:['Preparing the mission','No Jev request yet; placing the robot and initializing localization.'],
+  HELP:['Waiting for operator assistance','No new automatic Jev requests until you acknowledge or start a new mission.'],
+  STOPPED:['Mission stopped','No new Jev requests. Start a mission when ready.'],
+  IDLE:['Ready for a mission','No Jev requests yet. Start a random mission to begin.'],
+  SUCCEEDED:['Mission complete','No further Jev requests for this mission.']
+ };
+ return stages[s.phase]||['Waiting for mission status',''];
+}
+let lastTimeline='';
+async function refresh(){
+ try{
+  const reply=await fetch('/api/state');if(!reply.ok)throw Error('State unavailable');const s=await reply.json();
+  $('connection').textContent='● Live';document.querySelectorAll('button').forEach(b=>b.disabled=false);
+  $('phase').textContent=s.phase||'STARTING';$('health').textContent=s.health?.status||'UNKNOWN';$('model').textContent=s.decision?.model||'jev-latest';$('elapsed').textContent=(s.elapsed||0).toFixed(1)+' s';
+  const [activity,activityDetail]=jevActivity(s);$('supervision').textContent=activity;$('supervision-detail').textContent=activityDetail;$('calls').textContent=(s.jev_calls||0)+' total / '+(s.supervision?.calls||0)+' reviews';
+  $('summary').textContent=`Seed ${s.seed??'N/A'} · Scan/map agreement ${s.health?.scan_map_score?.toFixed(3)??'N/A'} · ${s.reason||''}`;
+  $('help').style.display=s.phase==='HELP'?'block':'none';$('helptext').textContent=s.reason||'';events=s.events||[];renderDecision(s);
+  const req=events.filter(e=>e.event==='JEV_REQUEST').at(-1),res=events.filter(e=>e.event==='JEV_RESPONSE').at(-1);
+  $('request').textContent=req?pretty(req):'No calls yet.';$('response').textContent=res?pretty(res):'No response yet.';
+  const timeline=JSON.stringify(events.slice(-60));
+  if(timeline!==lastTimeline){const open=new Set([...$('timeline').querySelectorAll('details[open]')].map(d=>d.dataset.key));lastTimeline=timeline;$('timeline').replaceChildren(...events.slice(-60).reverse().map(e=>{const d=document.createElement('details'),h=document.createElement('summary'),p=document.createElement('pre');d.dataset.key=[e.time,e.event,e.call_id].join(':');d.open=open.has(d.dataset.key);h.textContent=`${e.time?.toFixed(1)}s · ${e.event} · ${e.action||e.reason||''}`;p.textContent=pretty(e);d.append(h,p);return d}))}draw(s);
+ }catch(e){$('connection').textContent='Disconnected: displayed data may be stale';document.querySelectorAll('button').forEach(b=>b.disabled=true)}
+ setTimeout(refresh,500);
+}refresh();
+</script></body></html>
