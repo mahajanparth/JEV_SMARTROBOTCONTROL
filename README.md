@@ -1,18 +1,18 @@
 # JEV_SMARTROBOTCONTROL
 
-A ROS 2 robotics demo in which a TurtleBot3 Burger starts at a random location in
+A ROS 2 robotics experiment in which a TurtleBot3 Burger starts at a random location in
 a simulated house, localizes with AMCL, and navigates to a random destination.
 Jev chooses mission and recovery actions and monitors navigation while Nav2 drives.
 A browser dashboard shows the map, live Jev requests and responses, action
 probabilities, motion ownership, and recovery results.
 
-Start here for the current mission demo. Detailed behavior is in the
-[mission guide](docs/mission-demo.md); earlier demos are documented separately in
+Start here for the current mission experiment. Detailed behavior is in the
+[mission guide](docs/mission-demo.md); earlier experiments are documented separately in
 [recovery-only instructions](docs/recovery-only.md).
 
-## Demo screenshots
+## Experiment screenshots
 
-The demo combines a browser control panel, a Gazebo simulation, and RViz
+The experiment combines a browser control panel, a Gazebo simulation, and RViz
 visualization. [Jump to the setup instructions](#first-run) to run it locally.
 
 ### Control panel
@@ -77,7 +77,7 @@ variable takes precedence over the file.
 ```
 
 Open [the dashboard](http://localhost:8765), choose a seed, and click
-**Start random mission**. The demo starts idle by default. To open the dashboard
+**Start random mission**. The experiment starts idle by default. To open the dashboard
 from another terminal:
 
 ```bash
@@ -106,7 +106,7 @@ still vary. The house is a custom 12 by 10 metre map with rooms and furniture.
 ## Stop and restart
 
 The dashboard's **Stop mission** button stops robot motion and keeps the simulation
-and dashboard available. To shut down the entire demo, use another terminal:
+and dashboard available. To shut down the entire experiment, use another terminal:
 
 ```bash
 docker stop jev-mission
@@ -240,7 +240,7 @@ Read the mission node and policy together before changing action availability.
 Keep sensor freshness, collision checks, bounded motion, and command ownership
 in the local execution layer. Do not send simulator ground truth or credentials
 in Jev request bodies. After changing code, run the relevant checks below and
-restart the demo to load it.
+restart the experiment to load it.
 
 To change the house geometry, edit `scripts/generate_house.py` and run
 `python3 scripts/generate_house.py` to regenerate the world and occupancy map
@@ -273,7 +273,7 @@ Humble result is **127 passed, 2 opt-in tests skipped**. See
 [validation notes](docs/validation.md) for tested scenarios and remaining limits.
 
 To run a live random mission with an injected localization failure, start the
-demo idle first, then run:
+experiment idle first, then run:
 
 ```bash
 docker exec jev-mission bash -lc \
@@ -311,7 +311,7 @@ because of ambiguous localization, unavailable safe actions, or navigation failu
 Local movement and backtracking have automated coverage but have not both been
 demonstrated as Jev-selected actions in a complete live mission. The latest
 stable-lock spin change has automated coverage, not full random-mission validation.
-This project is a simulation demo; physical robot operation has not been validated.
+This project is a simulation experiment; physical robot operation has not been validated.
 
 ## Jev-controlled route replanning
 
