@@ -44,7 +44,7 @@ def test_help_ack_reassesses_without_enabling_motion(mission):
     mission.phase='HELP';mission.owner='NONE'
     mission.attempts['spin_attempts']=3
     response=mission.ack_service(None,Trigger.Response())
-    assert response.success and mission.phase=='DECIDING' and mission.owner=='NONE'
+    assert response.success and mission.phase=='ACK_RECHECK' and mission.owner=='NONE'
     assert mission.attempts['spin_attempts']==0
 
 
@@ -310,7 +310,7 @@ def test_bridge_obstacle_stop_flushes_commands_before_release():
     from std_msgs.msg import String
     rclpy.init(args=[],domain_id=195)
     node=MissionBridge();sent=[];node.publisher=SimpleNamespace(publish=sent.append)
-    node.safety=ObstacleSafety(SafetyConfig(release_delay=.001))
+    node.safety=ObstacleSafety(SafetyConfig(release_delay=.2))
     try:
         node.scan_at=node.odom_at=time.monotonic()
         node.scan_stamp=node.odom_stamp=node.get_clock().now().nanoseconds*1e-9
@@ -319,7 +319,7 @@ def test_bridge_obstacle_stop_flushes_commands_before_release():
         node.on_owner(String(data='NAV'));node.store('NAV',msg);node.relay()
         assert sent[-1].linear.x==0 and not node.commands
         node.on_owner(String(data='NONE'));node.points=[(3.,0.)];node.relay()
-        time.sleep(.005);node.relay()
+        time.sleep(.21);node.relay()
         assert not node.safety.latched
         node.on_owner(String(data='NAV'));node.relay()
         assert sent[-1].linear.x==0  # no replay of the previously blocked request
@@ -459,3 +459,38 @@ def test_planner_result_exception_stays_stopped(mission):
     mission.nav_result.set_exception(RuntimeError('Planner transport failed'))
     mission.step_replan(LocalizationState(),now)
     assert mission.phase=='HELP' and mission.owner=='NONE'
+
+
+def test_help_ack_waits_for_lock_before_offering_navigation(mission):
+    now=time.monotonic();mission.phase='HELP';mission.nav_started=True
+    mission.goal=(1.,0.,0.);mission.nav=SimpleNamespace(server_is_ready=lambda:True)
+    mission.ack_service(None,Trigger.Response());now=mission.stage_started
+    state=LocalizationState(status=Health.HEALTHY,data_ready=True,pose_uncertainty=.01,
+                            scan_map_score=.93,min_obstacle_distance=.34)
+    mission.safety_at=now;mission.step_recovery(state,now)
+    assert mission.phase=='ACK_RECHECK' and mission.call_count==0
+    mission.safety_at=now+2.2;mission.step_recovery(state,now+2.2)
+    assert mission.phase=='DECIDING' and mission.localization_ready and mission.call_count==0
+    assert 'RESUME_NAVIGATION' in mission.available(state,now+2.2)[0]
+
+
+def test_tuning_rejected_while_navigation_active(mission):
+    from jev_localization_recovery.obstacle_safety import SafetyConfig
+    mission.phase='NAVIGATING';mission.owner='NAV'
+    with pytest.raises(ValueError,match='Stop the mission'):mission.tune_safety(vars(SafetyConfig()))
+
+
+def test_bridge_tuning_is_atomic_and_requires_stopped_robot():
+    from jev_localization_recovery.mission_bridge import MissionBridge
+    from rclpy.parameter import Parameter
+    rclpy.init(args=[],domain_id=195);node=MissionBridge()
+    try:
+        node.owner='NONE';node.owner_at=node.odom_at=time.monotonic()
+        result=node.set_parameters_atomically([Parameter('safety_margin',value=.08),Parameter('safety_radius',value=.1)])
+        assert not result.successful and node.safety.config.margin==.05
+        result=node.set_parameters_atomically([Parameter('safety_margin',value=.08)])
+        assert result.successful and node.safety.config.margin==.08 and node.safety.latched
+        assert node.get_parameter('safety_margin').value==.08
+        node.owner='NAV'
+        assert not node.set_parameters_atomically([Parameter('safety_margin',value=.09)]).successful
+    finally:node.destroy_node();rclpy.shutdown()

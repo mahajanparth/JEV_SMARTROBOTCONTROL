@@ -11,6 +11,8 @@ import time
 
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.parameter import Parameter
+from rcl_interfaces.srv import SetParametersAtomically
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from std_msgs.msg import String
 from std_srvs.srv import Trigger, Empty
@@ -78,6 +80,8 @@ class MissionNode(RecoveryNode):
         self.set_entity=self.create_client(SetEntityState,'/set_entity_state')
         self.get_entity=self.create_client(GetEntityState,'/get_entity_state')
         self.commands=Queue(maxsize=20)
+        self.tuning_client=self.create_client(SetParametersAtomically,'/jev_gazebo_support/set_parameters_atomically')
+        self.tuning_future=None;self.tuning_result=dict(status='IDLE',message='No settings changed')
         self.create_service(Trigger,'/demo/start',self.start_service)
         self.create_service(Trigger,'/demo/stop',self.stop_service)
         self.create_service(Trigger,'/demo/acknowledge_help',self.ack_service)
@@ -130,14 +134,31 @@ class MissionNode(RecoveryNode):
 
     def ack_service(self,req,res):
         if self.phase!='HELP': res.success=False; res.message='No help request is pending'
+        elif self.tuning_future is not None:res.success=False;res.message='Wait for safety settings to finish applying'
         elif (self.pending and not self.pending.done()) or self.reviews_inflight(): res.success=False; res.message='Waiting for previous Jev request to finish'
         else:
             # Explicit new bounded recovery budget after an operator intervention.
             self.attempts={k:0 for k in self.attempts}; self.local_attempts=0; self.nav_failures=0
             self.pause_count=0; self.ready_since=None; self.started=time.monotonic()
-            self.set_phase('DECIDING','Operator intervention acknowledged; rechecking evidence')
+            self.replan_attempts=0;self.blocked_decision=False;self.blocked_review=False
+            self.stage_started=time.monotonic()
+            self.set_phase('ACK_RECHECK','Checking fresh localization for two seconds before asking Jev again')
             res.success=True; res.message=self.reason
         return res
+
+    def tune_safety(self,values):
+        from .obstacle_safety import SafetyConfig, SAFETY_LIMITS
+        if self.phase not in ('IDLE','HELP','STOPPED','SUCCEEDED') or self.owner!='NONE' or self.nav_send or self.nav_handle:
+            raise ValueError('Stop the mission before changing safety settings')
+        if self.tuning_future is not None:raise ValueError('A settings update is already pending')
+        if not isinstance(values,dict) or set(values)!=set(SAFETY_LIMITS):raise ValueError('Supply all eight safety parameters')
+        if any(isinstance(v,bool) or not isinstance(v,(int,float)) for v in values.values()):raise ValueError('Numeric values required')
+        SafetyConfig(**values)
+        if not self.tuning_client.service_is_ready():raise ValueError('Safety bridge parameter service unavailable')
+        req=SetParametersAtomically.Request()
+        req.parameters=[Parameter('safety_'+k,value=float(v)).to_parameter_msg() for k,v in values.items()]
+        self.tuning_future=self.tuning_client.call_async(req)
+        self.tuning_result=dict(status='PENDING',message='Waiting for safety bridge')
 
     def inject_service(self,req,res):
         res.stamp=self.get_clock().now().to_msg()
@@ -162,6 +183,7 @@ class MissionNode(RecoveryNode):
         return res
 
     def start_mission(self,seed):
+        if self.tuning_future is not None:return False,'Wait for safety settings to finish applying'
         if self.phase not in ('IDLE','STOPPED','SUCCEEDED','HELP') or self.nav_send or self.nav_handle or (self.pending and not self.pending.done()) or self.reviews_inflight():
             return False,'Stop the current mission and wait for cancellation before starting'
         if self.grid is None or not self.set_entity.service_is_ready() or not self.global_client or not self.global_client.service_is_ready():
@@ -514,6 +536,12 @@ class MissionNode(RecoveryNode):
 
     def step_recovery(self,state,now):
         self.nav_poll()
+        if self.tuning_future is not None and self.tuning_future.done():
+            try:
+                result=self.tuning_future.result().result
+                self.tuning_result=dict(status='APPLIED' if result.successful else 'REJECTED',message=result.reason)
+            except Exception:self.tuning_result=dict(status='REJECTED',message='Safety bridge update failed')
+            self.tuning_future=None;self.emit('SAFETY_SETTINGS',**self.tuning_result)
         if self.phase!='NAVIGATING' and self.phase!='EXECUTING': self.owner='NONE'
         self.owner_pub.publish(String(data=self.owner))
         for at,msg in self.injections[:]:
@@ -538,6 +566,9 @@ class MissionNode(RecoveryNode):
             if cmd['command']=='start':
                 ok,reason=self.start_mission(cmd.get('seed',self.seed)); self.emit('COMMAND_RESULT',success=ok,reason=reason)
             elif cmd['command']=='stop': self.stop_service(None,Trigger.Response())
+            elif cmd['command']=='tune_safety':
+                try:self.tune_safety(cmd.get('parameters'))
+                except ValueError as exc:self.tuning_result=dict(status='REJECTED',message=str(exc))
             elif cmd['command']=='ack':
                 r=self.ack_service(None,Trigger.Response()); self.emit('COMMAND_RESULT',success=r.success,reason=r.message)
             else:
@@ -565,14 +596,14 @@ class MissionNode(RecoveryNode):
             self.step_replan(state,now);return
         if self.phase=='SAFETY_WAIT':
             if self.safety_wait_started is None:self.safety_wait_started=now
-            if not self.blocked_review and self.can_replan(now) and now-self.safety_wait_started<15:
+            if not self.blocked_review and self.can_replan(now) and now-self.safety_wait_started<float(safety.get('parameters',{}).get('blocked_timeout',self.get_parameter('safety_blocked_timeout').value)):
                 self.blocked_decision=True;self.request_decision(state,now)
                 if self.phase=='WAITING_JEV':self.blocked_review=True
                 return
             if safety['status'] in ('CLEAR','SLOW') and not safety.get('latched'):
                 self.blocked_decision=False
                 self.set_phase('DECIDING','Obstacle cleared; asking Jev to reassess')
-            elif now-self.safety_wait_started>float(self.get_parameter('safety_blocked_timeout').value):
+            elif now-self.safety_wait_started>float(safety.get('parameters',{}).get('blocked_timeout',self.get_parameter('safety_blocked_timeout').value)):
                 self.halt('HELP','Obstacle safety requires operator assistance: '+safety.get('reason','Blocked'))
             return
         if self.phase in ('IDLE','HELP','STOPPED','SUCCEEDED','CANCELING'):return
@@ -591,6 +622,9 @@ class MissionNode(RecoveryNode):
                 except Exception:self.halt('HELP','AMCL global initialization failed');return
                 self.set_phase('DECIDING','Initial localization observations ready')
             elif now-self.stage_started>20:self.halt('HELP','Initial sensor/localization evidence unavailable')
+        elif self.phase=='ACK_RECHECK':
+            if now-self.stage_started>=2.1 and (self.localization_ready or not healthy):
+                self.set_phase('DECIDING','Fresh evidence checked after operator intervention')
         elif self.phase=='DECIDING':
             self.request_decision(state,now)
         elif self.phase=='WAITING_JEV':
@@ -684,6 +718,7 @@ class MissionNode(RecoveryNode):
         data=dict(phase=self.phase,seed=self.seed,goal=self.goal,pose=self.monitor.pose,
             elapsed=now-self.started,health=state.to_dict(),safety=self.safety_snapshot(now),owner=self.owner,reason=self.reason,
             decision=self.decision,active_action=self.active_action,path=self.path,
+            tuning=self.tuning_result,
             replanning=dict(attempts=self.replan_attempts,limit=self.replan_limit,result=self.replan_result),
             jev_calls=self.call_count,supervision=dict(enabled=True,interval_seconds=self.supervision_interval,
                 status=self.supervision_status if self.phase=='NAVIGATING' else 'INACTIVE',
@@ -694,10 +729,11 @@ class MissionNode(RecoveryNode):
             allowed=self.navigation_choices(now)
         elif self.phase in ('DECIDING','WAITING_JEV','PAUSED','EVALUATING'):
             allowed,_=self.available(state,now)
+        elif self.phase in ('HELP','ACK_RECHECK'):allowed=['STOP']
         else:allowed=['STOP','REQUEST_HELP']
         data['action_availability']={a:dict(available=a in allowed,description=description,
             reason='Available at this decision point' if a in allowed else
-            ('Requires navigation to stop first' if self.phase=='NAVIGATING' else 'Unavailable in this stage or current safety/attempt conditions'))
+            ('Acknowledge intervention, then wait for fresh localization checks' if self.phase in ('HELP','ACK_RECHECK') else 'Requires navigation to stop first' if self.phase=='NAVIGATING' else 'Unavailable in this stage or current safety/attempt conditions'))
             for a,description in ACTIONS.items()}
         data['last_veto']=self.last_veto
         self.demo_pub.publish(String(data=json.dumps(data,allow_nan=False)))
