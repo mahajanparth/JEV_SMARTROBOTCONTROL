@@ -1,0 +1,28 @@
+build/
+install/
+log/
+build_gazebo/
+install_gazebo/
+log_gazebo/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+# Local credentials and private notes never belong in commits.
+docker/apikey_*
+docker/temp_file*
+.env
+.env.*
+secrets/
+API_KEY
+docker/API_KEY
+
+build_mission/
+install_mission/
+log_mission/
+
+# Machine-specific editor settings and generated runtime logs.
+.vscode/
+/,
+*.log
+docs/mission-runs/*.jsonl
+docs/mission-runs/*.spawn.json
