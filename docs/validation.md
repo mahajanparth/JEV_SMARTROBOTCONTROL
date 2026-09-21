@@ -5,7 +5,7 @@ Nav2/AMCL source. The regular tests cover scoring geometry, covariance, health,
 decision selection, motion safety, backtrack history, DDS/TF transport, recovery
 evaluation, cooldowns, STOP/reset, and command ownership.
 
-Latest `colcon test` result: **124 passed, 2 opt-in tests skipped**, zero failures.
+Latest `colcon test` result: **127 passed, 2 opt-in tests skipped**, zero failures.
 This includes the Jev response schema, HTTP adapter, asynchronous decisions,
 timeouts, stale responses, sensor loss, confidence threshold, and attempt limit.
 The Gazebo recovery and mission end-to-end checks were run separately.
@@ -134,3 +134,18 @@ acceptance after STOP, footprint collision protection, one blocked assessment,
 and stale controller feedback. The full suite passes with **124 passed, 2 skipped**.
 The earlier obstacle report predates the one-assessment replanning policy. A full
 live mission with Jev selecting REPLAN_PATH has not yet been verified.
+
+## Safety tuning window and help-loop regression
+
+The full suite passed with **127 passed, 2 skipped**. Added coverage reproduces
+healthy AMCL with approximately 0.34 m obstacle clearance after help acknowledgment,
+verifying that no Jev call is made during the fresh-lock wait and navigation becomes
+available afterward. Parameter tests verify stopped-only updates, atomic rejection,
+active ROS parameter agreement, and clearance rechecking after changes.
+
+A live HTTP-to-ROS update changed the margin from 0.05 to 0.06 m while IDLE with
+zero applied velocity. A radius of 0.10 m was rejected without changing the active
+configuration. All eight default values were restored, and safety returned CLEAR.
+The separate page rendered eight editable fields and active values in Chrome;
+Apply was disabled when the mission became active. The help-loop fix has automated
+regression coverage; a complete live help/acknowledge/resume cycle remains unverified.

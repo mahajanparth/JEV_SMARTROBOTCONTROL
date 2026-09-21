@@ -273,3 +273,40 @@ The navigation behavior trees now compute once per goal instead of automatically
 replanning every second. `RESUME_NAVIGATION` remains a restart after interruption;
 `REPLAN_PATH` is an explicit route-replacement decision with its own attempt budget.
 The dashboard shows its probability when offered, attempt count, result, and route.
+
+## Live safety tuning and help acknowledgment
+
+Click **Tune safety settings** in the control panel's Obstacle safety section to
+open a separate small window, or open [Safety tuning](http://localhost:8765/safety).
+It displays the active values reported by the bridge alongside editable values:
+
+| Setting | Units | Allowed range |
+| --- | --- | --- |
+| Robot radius | m | 0.18 to 0.35 |
+| Extra clearance margin | m | 0.02 to 0.30 |
+| Assumed braking deceleration | m/s² | 0.05 to 2.0 |
+| Reaction allowance | s | 0.05 to 1.0 |
+| Slowdown band | m | 0.05 to 1.0 |
+| Scan and odometry timeout | s | 0.10 to 0.75 |
+| Sustained-clearance release delay | s | 0.20 to 5.0 |
+| Blocked wait before operator help | s | 2 to 120 |
+
+Use **Stop mission** before applying changes, or tune while IDLE, HELP, or SUCCEEDED.
+The server also checks that no goal or update is pending. The bridge independently
+requires fresh stopped odometry and owner NONE. Updates are applied atomically;
+an invalid value rejects the whole update. Applied changes discard old commands
+and trigger a fresh clearance check. **Reload active values** discards unsaved
+edits in the window. Changes last only for the current session; edit
+`config/obstacle_safety.yaml` for defaults used on restart.
+
+Increasing assumed braking strength shortens the stopping envelope; increasing
+the sensor timeout accepts older data. These are simulation tuning controls.
+Existing recovery-specific spin/rear clearance limits remain separate YAML settings.
+
+After **Intervention complete: reassess**, the mission now enters ACK_RECHECK and
+waits for fresh localization checks before asking Jev again. Previously it reset
+the stable-lock timer but immediately called Jev, temporarily hiding navigation
+and creating a repeated REQUEST_HELP loop near obstacles. HELP now explicitly
+requires acknowledgment instead of labeling REQUEST_HELP as an available next
+choice. An obstacle, stale sensor, or genuinely unreliable localization can still
+prevent motion after acknowledgment.
