@@ -1,0 +1,7 @@
+{
+  "seed": 42,
+  "injection_requested": true,
+  "success": false,
+  "error": "<urlopen error [Errno 111] Connection refused>",
+  "final_state": {}
+}
