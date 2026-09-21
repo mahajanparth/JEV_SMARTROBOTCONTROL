@@ -1,6 +1,7 @@
 # Obstacle safety feature plan
 
-Status: proposed; no behavior changes implemented.
+Status: implemented on the feature branch. See `docs/validation.md` for results.
+This document preserves the original design and acceptance checklist.
 Branch: `feature/obstacle-safety`.
 
 ## Existing protections

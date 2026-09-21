@@ -5,7 +5,7 @@ Nav2/AMCL source. The regular tests cover scoring geometry, covariance, health,
 decision selection, motion safety, backtrack history, DDS/TF transport, recovery
 evaluation, cooldowns, STOP/reset, and command ownership.
 
-Latest `colcon test` result: **90 passed, 2 opt-in tests skipped**, zero failures.
+Latest `colcon test` result: **113 passed, 2 opt-in tests skipped**, zero failures.
 This includes the Jev response schema, HTTP adapter, asynchronous decisions,
 timeouts, stale responses, sensor loss, confidence threshold, and attempt limit.
 The Gazebo recovery and mission end-to-end checks were run separately.
@@ -104,3 +104,23 @@ local targets as executed actions. Spin stages of all three rotation recoveries
 now finish after two seconds of stable navigation-quality localization; tests
 also verify that brief or weak locks do not finish a spin. These changes passed
 the regular suite above; they have not yet been validated in a full random mission.
+
+## Shared obstacle safety
+
+The feature adds geometry and runtime tests for forward, reverse, spin, curved
+motion, measured velocity, proportional slowdown, invalid lidar sectors, stale
+evidence, ownership revocation, cancellation, and command flushing before release.
+
+The known-pose Gazebo fixture with live Jev navigation passed. A newly inserted
+obstacle caused a BLOCKED state observed about **0.30 s** after insertion. Minimum
+sampled geometric clearance was **0.029 m** using the configured robot radius and
+a circumscribed radius for the box. The mission revoked ownership and stayed in
+SAFETY_WAIT with zero commands and no additional Jev calls during the measured
+wait. The fixture stopped the mission and removed its obstacle afterward.
+
+Evidence: [obstacle check](mission-runs/obstacle-check.json). The detection timing
+includes dashboard polling and is not a direct command-loop latency measurement.
+Clearance is sampled geometry, not contact-sensor evidence. Braking parameters
+remain simulation assumptions. A complete random-start mission with delocalization
+has not been rerun after this feature; physical hardware and moving-obstacle
+prediction remain outside the validated scope.

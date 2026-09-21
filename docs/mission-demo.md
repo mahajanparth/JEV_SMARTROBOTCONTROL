@@ -191,3 +191,56 @@ periodic review rate; recovery shows **Executing Jev decision**; evaluation show
 execution and evaluation retain continuous local safety/health monitoring without
 periodic Jev calls. Waiting, paused, stopped, help, and completed stages each have
 an explicit explanation instead of an ambiguous “inactive” label.
+
+## Obstacle safety and simulation tests
+
+`mission_bridge.py` is the sole final velocity publisher. `obstacle_safety.py`
+checks a swept circular footprint for the requested and measured motion, and
+scales linear and angular speeds together when slowing. Conservative full-scan
+validation treats NaN, zero, negative, out-of-range, incomplete, or stale evidence
+as a fault. Valid positive infinity represents clear space only to the finite
+sensor maximum. Laser points use a scan-time transform into `base_footprint`.
+
+The shared configuration is `config/obstacle_safety.yaml`: radius 0.18 m, margin
+0.05 m, braking assumption 0.3 m/s², reaction allowance 0.15 s plus scan age,
+slowdown band 0.25 m, sensor timeout 0.5 s, and release delay 1 s. The stopping
+sweep conservatively retains constant velocity for the full braking interval.
+These values require separate measurement and validation before hardware use.
+
+`/demo/safety` reports status, reason, envelope clearance, scan/odometry age,
+requested/applied velocity, owner, and latch state. Status changes appear as
+SAFETY events. `SAFETY_WAIT` pauses decisions until the filter is clear; after 15 s,
+the mission requests help. Old commands are flushed, outstanding navigation
+reviews are invalidated, and navigation cancellation must complete before Jev
+reassesses. Existing recovery clearance checks still apply. Faults cannot be
+cleared by model confidence or an operator acknowledgment alone.
+
+Insert a test-owned 0.2 × 0.2 × 0.5 m static box ahead of the robot, only where
+fresh forward scan evidence shows sufficient clearance:
+
+```bash
+docker exec jev-mission bash -lc \
+  'source /opt/ros/humble/setup.bash && source /ws/install_mission/setup.bash && python3 scripts/obstacle_fixture.py insert --distance 0.65'
+
+docker exec jev-mission bash -lc \
+  'source /opt/ros/humble/setup.bash && source /ws/install_mission/setup.bash && python3 scripts/obstacle_fixture.py remove'
+```
+
+This helper changes Gazebo geometry, not the AMCL pose. It only removes its named
+`jev_safety_test_obstacle`; existing objects are not deleted. Nav2 may avoid a box
+placed far enough away without the final gate needing to stop the robot.
+
+For an automated check, start the demo idle and run:
+
+```bash
+docker exec jev-mission bash -lc \
+  'source /opt/ros/humble/setup.bash && source /ws/install_mission/setup.bash && python3 scripts/check_obstacle_safety.py'
+```
+
+This uses an explicit known-pose AMCL fixture, real Jev navigation, and a box
+inserted 0.4 m ahead while moving. It checks a BLOCKED state, revoked ownership,
+zero commands, positive sampled geometric clearance, and no new Jev calls during
+the blocked wait. Finally it stops the mission and removes its obstacle. The report
+is `docs/mission-runs/obstacle-check.json`. The fixture does not prove arbitrary
+moving-obstacle avoidance or unknown-pose localization, and uses geometric
+separation rather than a Gazebo contact sensor.

@@ -147,6 +147,29 @@ localization: fresh data, healthy status, uncertainty below **0.35**, and scan/m
 agreement at least **0.85**. A HEALTHY label alone does not meet this stricter
 condition. The robot then stops for the normal four-second recovery evaluation.
 
+## Obstacle safety
+
+All navigation and recovery commands pass through a shared 20 Hz obstacle filter.
+It checks a circular robot footprint along the commanded and measured motion,
+including a conservative stopping envelope. Commands slow near obstacles and stop
+when the envelope is blocked, lidar coverage is invalid, or scan/odometry evidence
+is stale. It uses scan-time transforms and requires full 360-degree lidar coverage.
+
+The dashboard shows `CLEAR`, `SLOW`, `BLOCKED`, or `SENSOR_FAULT`, the reason,
+envelope clearance, and requested versus applied velocity. A blocked action revokes
+motion ownership and cancels navigation or aborts recovery. Jev receives safety
+telemetry, but cannot override the filter. No periodic Jev calls run in `SAFETY_WAIT`.
+After sustained clearance and cancellation, Jev decides the next action; buffered
+commands are discarded. A blockage lasting 15 seconds requests operator help.
+
+Tune the simulation assumptions in
+`src/jev_localization_recovery/config/obstacle_safety.yaml`. The footprint radius is
+0.18 m plus a 0.05 m margin. Reaction allowance is 0.15 s plus scan age; assumed
+braking deceleration is 0.3 m/s². These are conservative simulation settings, not
+measured hardware guarantees. The filter does not estimate obstacle velocities.
+See the [mission guide](docs/mission-demo.md#obstacle-safety-and-simulation-tests)
+for obstacle insertion and the live validation command.
+
 ## Test delocalization
 
 During navigation, use the dashboard's delocalization control. It changes AMCL's
@@ -218,7 +241,7 @@ PYTHONPATH=src/jev_localization_recovery python3 -m pytest -q src/jev_localizati
 ```
 
 ROS tests skip when their dependencies are unavailable. The latest recorded full
-Humble result is **90 passed, 2 opt-in tests skipped**. See
+Humble result is **113 passed, 2 opt-in tests skipped**. See
 [validation notes](docs/validation.md) for tested scenarios and remaining limits.
 
 To run a live random mission with an injected localization failure, start the
