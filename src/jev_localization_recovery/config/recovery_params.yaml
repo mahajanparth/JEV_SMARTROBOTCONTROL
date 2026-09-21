@@ -1,0 +1,56 @@
+jev_recovery:
+  ros__parameters:
+    # Empty names discover a unique matching live topic; set names for multi-robot graphs.
+    pose_topic: ''
+    scan_topic: ''
+    map_topic: ''
+    odom_topic: ''
+    cmd_vel_topic: ''
+    global_localization_service: ''
+    base_frame: base_link
+    odom_frame: odom
+    enable_recovery: false
+    selector_provider: mock
+    jev_model: jev-latest
+    # Key contents never belong in this YAML. Use a file path or environment.
+    jev_api_key_file: ''
+    jev_supervision_interval: 0.2  # Mission mode: one navigation review per interval.
+    jev_supervision_max_inflight: 4
+    jev_timeout: 3.0
+    decision_timeout: 4.0
+    jev_min_confidence: 0.2
+    yaw_weight: 0.5
+    uncertainty_degraded: 0.5
+    uncertainty_lost: 2.0
+    score_healthy: 0.65
+    score_lost: 0.25
+    jump_distance: 0.75
+    jump_yaw: 0.8
+    jump_hold_sec: 2.0
+    beam_stride: 8
+    occupied_threshold: 65
+    cell_tolerance: 2
+    minimum_valid_beams: 12
+    max_scan_age: 0.75
+    max_pose_age: 30.0
+    pose_scan_tolerance: 0.5
+    tf_time_tolerance: 0.05
+    log_interval: 2.0
+    # Distances are from base origin: include robot footprint radius + margin.
+    spin_clearance: 0.35
+    rear_clearance: 0.45
+    spin_speed: 0.35
+    spin_angle: 6.283185307179586
+    max_odom_age: 0.75
+    action_timeout: 45.0
+    service_timeout: 3.0
+    global_settle_time: 1.0
+    bad_hold_time: 1.5
+    cooldown: 3.0
+    max_attempts: 3
+    evaluation_time: 8.0
+    healthy_hold_time: 1.0
+    score_improvement: 0.1
+    uncertainty_improvement: 0.1
+    backtrack_speed: 0.08
+    backtrack_distance: 0.6
