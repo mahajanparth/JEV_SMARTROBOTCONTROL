@@ -1,0 +1,11 @@
+jev_gazebo_support:
+  ros__parameters:
+    # Circular footprint matches Nav2; metres from base_footprint origin.
+    safety_radius: 0.18
+    safety_margin: 0.05
+    # Conservative simulation assumptions, validate before hardware use.
+    safety_braking: 0.3  # m/s^2
+    safety_reaction: 0.15  # seconds, plus measured scan age
+    safety_slowdown: 0.25  # metres beyond the stopping envelope
+    safety_sensor_timeout: 0.5  # seconds for scan and odometry
+    safety_release_delay: 1.0  # seconds of sustained clearance
