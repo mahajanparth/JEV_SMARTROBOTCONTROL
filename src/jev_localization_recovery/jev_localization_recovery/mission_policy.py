@@ -7,6 +7,7 @@ from urllib import request, error
 from .recovery_selector import JevRecoverySelector
 
 ACTIONS = {
+    'REPLAN_PATH': 'Stop and compute a fresh route to the same goal using current obstacles; only with reliable localization. Never overrides obstacle safety.',
     'CONTINUE_NAVIGATION': 'Keep the current Nav2 goal running when localization and navigation evidence are safe; turning in place can be normal progress.',
     'SPIN': 'First safe full rotation to acquire localization observations.',
     'GLOBAL_RELOCALIZE': 'Reset global AMCL hypotheses and rotate. Prefer when lost or a spin failed.',
@@ -70,7 +71,7 @@ class MissionSelector(JevRecoverySelector):
     def make_payload(self, state, allowed, targets):
         questions = {'action': {'type': 'choice', 'instructions': (
             'Choose the next safe robot mission action from the available choices. '
-            'If localization_ready, navigate or resume immediately. At initial startup AMCL has '
+            'When blocked or making sustained poor progress, choose REPLAN_PATH if offered, or pause to wait. Never globally relocalize just because an obstacle blocks progress. If clear and localization_ready, navigate or resume. At initial startup AMCL has '
             'already been globally initialized, so choose SPIN to gather observations. '
             'If navigation_started is true and robot status is LOST, prefer an available '
             'GLOBAL_RELOCALIZE to recover the map pose rather than a first spin. '
@@ -86,7 +87,7 @@ class MissionSelector(JevRecoverySelector):
                 'Choose CONTINUE_NAVIGATION when localization and sensor evidence are safe and progress '
                 'is reasonable. Turning in place at the start or near a goal is normal; brief lack '
                 'of translation or missing early feedback alone does not require stopping. '
-                'Choose PAUSE_NAVIGATION for sustained lack of progress, concerning route deviation, '
+                'Choose REPLAN_PATH if offered for sustained lack of progress or a route obstructed by obstacles. Do not repeatedly replan for normal turns. Choose PAUSE_NAVIGATION for concerning route deviation, '
                 'or deteriorating localization. Choose REQUEST_HELP when an operator is needed, '
                 'or STOP to end an unsafe mission. Nav2 is already driving; do not restart its goal.')
         if targets:
