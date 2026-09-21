@@ -10,6 +10,33 @@ Start here for the current mission demo. Detailed behavior is in the
 [mission guide](docs/mission-demo.md); earlier demos are documented separately in
 [recovery-only instructions](docs/recovery-only.md).
 
+## Demo screenshots
+
+The demo combines a browser control panel, a Gazebo simulation, and RViz
+visualization. [Jump to the setup instructions](#first-run) to run it locally.
+
+### Control panel
+
+Start and stop missions, inspect the map, and follow Jev's decisions, action
+probabilities, localization health, and obstacle safety from one browser view.
+This capture shows the operator-help screen after a rejected action.
+
+![Jev control panel showing mission controls, the house map, and decision telemetry](docs/images/mission-control-panel.png)
+
+### Gazebo simulation
+
+The simulated TurtleBot3 explores a furnished house. The blue rays show its
+lidar scan against the walls and obstacles.
+
+![Gazebo showing the TurtleBot3 and its blue lidar rays inside the simulated house](docs/images/mission-gazebo.png)
+
+### RViz visualization
+
+RViz overlays the estimated robot pose, laser endpoints, planned route, and
+mission destination on the occupancy map, alongside localization health.
+
+![RViz showing the house occupancy map, red laser endpoints, planned route, and localization health](docs/images/mission-rviz.png)
+
 ## Requirements
 
 - A Linux host with Docker installed, running, and accessible to your user.
