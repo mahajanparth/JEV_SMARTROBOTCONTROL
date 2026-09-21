@@ -4,7 +4,7 @@ from setuptools import find_packages, setup
 setup(
     name='jev_localization_recovery', version='0.1.0',
     packages=find_packages(exclude=['test']),
-    package_data={'jev_localization_recovery': ['dashboard.html']},
+    package_data={'jev_localization_recovery': ['dashboard.html', 'safety.html']},
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/jev_localization_recovery']),
         ('share/jev_localization_recovery', ['package.xml']),
