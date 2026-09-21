@@ -1,0 +1,59 @@
+{
+  "environment": "Gazebo 11 / TurtleBot3 Burger / Jev house / real Nav2 AMCL",
+  "baseline_score": 1.0,
+  "rotation_radians": 12.734835350612851,
+  "recovery": {
+    "event": "RECOVERY SUCCESS",
+    "reason": "Fresh healthy observations and improved metrics",
+    "action": "GLOBAL_RELOCALIZE",
+    "provider": "jev",
+    "decision": {
+      "event": "DECISION",
+      "provider": "jev",
+      "model": "jev-1.13.0",
+      "selected_action": "GLOBAL_RELOCALIZE",
+      "confidence": 1.0,
+      "probabilities": {
+        "GLOBAL_RELOCALIZE": 1.0,
+        "SPIN": 0.0,
+        "BACKTRACK_AND_SPIN": 0.0,
+        "STOP": 0.0
+      },
+      "explanation": "TypeSafe Jev Choice result; safety checks are applied locally"
+    },
+    "before": {
+      "pose_uncertainty": 0.018028430824661257,
+      "scan_map_score": 0.5,
+      "pose_jump_distance": 0.0,
+      "pose_jump_yaw": 0.0,
+      "min_obstacle_distance": 1.1740024348482367,
+      "rear_clearance": 1.2319377260919033,
+      "spin_attempts": 1,
+      "global_relocalization_attempts": 0,
+      "backtrack_attempts": 0,
+      "status": "DEGRADED",
+      "data_ready": true,
+      "worsened_while_moving": false,
+      "backtrack_available": false,
+      "global_service_available": true,
+      "reason": "Elevated covariance, poor agreement, or recent jump"
+    },
+    "after": {
+      "pose_uncertainty": 0.30252167625263937,
+      "scan_map_score": 0.7317073170731707,
+      "pose_jump_distance": 0.0,
+      "pose_jump_yaw": 0.0,
+      "min_obstacle_distance": 1.1864755091272585,
+      "rear_clearance": 1.2079347525156658,
+      "spin_attempts": 1,
+      "global_relocalization_attempts": 1,
+      "backtrack_attempts": 0,
+      "status": "HEALTHY",
+      "data_ready": true,
+      "worsened_while_moving": false,
+      "backtrack_available": false,
+      "global_service_available": true,
+      "reason": "Covariance and scan-map agreement are reasonable"
+    }
+  }
+}

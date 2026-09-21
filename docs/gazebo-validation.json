@@ -1,0 +1,44 @@
+{
+  "environment": "Gazebo 11 / TurtleBot3 Burger / Jev house / real Nav2 AMCL",
+  "baseline_score": 1.0,
+  "rotation_radians": 6.350665890129357,
+  "recovery": {
+    "event": "RECOVERY SUCCESS",
+    "reason": "Fresh healthy observations and improved metrics",
+    "action": "GLOBAL_RELOCALIZE",
+    "before": {
+      "pose_uncertainty": 0.014365872571182721,
+      "scan_map_score": 0.28205128205128205,
+      "pose_jump_distance": 5.656641318665008,
+      "pose_jump_yaw": 1.5024473508936271,
+      "min_obstacle_distance": 1.1941032868079566,
+      "rear_clearance": 1.2928479394449401,
+      "spin_attempts": 0,
+      "global_relocalization_attempts": 0,
+      "backtrack_attempts": 0,
+      "status": "LOST",
+      "data_ready": true,
+      "worsened_while_moving": false,
+      "backtrack_available": false,
+      "global_service_available": true,
+      "reason": "Pose jump and poor scan-map agreement"
+    },
+    "after": {
+      "pose_uncertainty": 0.0061322098831897605,
+      "scan_map_score": 1.0,
+      "pose_jump_distance": 0.0,
+      "pose_jump_yaw": 0.0,
+      "min_obstacle_distance": 1.1910195667587762,
+      "rear_clearance": 1.249654522251968,
+      "spin_attempts": 0,
+      "global_relocalization_attempts": 1,
+      "backtrack_attempts": 0,
+      "status": "HEALTHY",
+      "data_ready": true,
+      "worsened_while_moving": false,
+      "backtrack_available": false,
+      "global_service_available": true,
+      "reason": "Covariance and scan-map agreement are reasonable"
+    }
+  }
+}
