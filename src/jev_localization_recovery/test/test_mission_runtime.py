@@ -20,6 +20,7 @@ def mission(monkeypatch):
     monkeypatch.setattr(module,'Dashboard',lambda *a:SimpleNamespace(snapshot='',close=lambda:None))
     rclpy.init(args=[],domain_id=196)
     node=MissionNode();node.emit=lambda *a,**k:None
+    node.safety_status=dict(status="CLEAR",reason="Test fixture",latched=False);node.safety_at=time.monotonic()
     node.publish_velocity=lambda *a:None
     node.owner_pub=SimpleNamespace(publish=lambda m:None)
     yield node
@@ -43,7 +44,7 @@ def test_help_ack_reassesses_without_enabling_motion(mission):
     mission.phase='HELP';mission.owner='NONE'
     mission.attempts['spin_attempts']=3
     response=mission.ack_service(None,Trigger.Response())
-    assert response.success and mission.phase=='DECIDING' and mission.owner=='NONE'
+    assert response.success and mission.phase=='ACK_RECHECK' and mission.owner=='NONE'
     assert mission.attempts['spin_attempts']==0
 
 
@@ -81,7 +82,9 @@ def test_expiring_velocity_owner_and_obstacle_gate():
     node=MissionBridge();sent=[]
     node.publisher=SimpleNamespace(publish=sent.append)
     try:
-        now=time.monotonic();node.scan_at=now;node.nearest=1.
+        now=time.monotonic();node.scan_at=node.odom_at=now
+        node.scan_stamp=node.odom_stamp=node.get_clock().now().nanoseconds*1e-9
+        node.points=[(3.,0.)];node.scan_fault=None
         nav=Twist();nav.linear.x=.1
         recovery=Twist();recovery.angular.z=.35
         node.on_owner(String(data='NAV'));node.store('NAV',nav);node.store('RECOVERY',recovery)
@@ -90,7 +93,7 @@ def test_expiring_velocity_owner_and_obstacle_gate():
         assert sent[-1].linear.x==0 and sent[-1].angular.z==0  # old commands flushed
         node.store('RECOVERY',recovery);node.relay();assert sent[-1].angular.z==.35
         node.owner_at=now-1;node.relay();assert sent[-1].angular.z==0
-        node.on_owner(String(data='NAV'));node.store('NAV',nav);node.nearest=.1
+        node.on_owner(String(data='NAV'));node.store('NAV',nav);node.points=[(.1,0.)]
         node.relay();assert sent[-1].linear.x==0
     finally:node.destroy_node();rclpy.shutdown()
 
@@ -228,6 +231,7 @@ def test_recovery_spin_finishes_on_sustained_lock(mission,monkeypatch,action):
     state=LocalizationState(status=Health.HEALTHY,data_ready=True,pose_uncertainty=.01,scan_map_score=.95,min_obstacle_distance=1.)
     for elapsed in (0.,1.,2.1):
         node.motion_sample=MotionSample(0,0,0,now+elapsed)
+        node.safety_at=now+elapsed  # fresh safety heartbeat for the simulated tick
         node.step_recovery(state,now+elapsed)
         if elapsed<2:assert node.phase=='EXECUTING'
     assert node.phase=='EVALUATING' and node.owner=='NONE'
@@ -242,6 +246,7 @@ def test_brief_or_weak_lock_does_not_finish_spin(mission,monkeypatch):
     state=LocalizationState(status=Health.HEALTHY,data_ready=True,pose_uncertainty=.01,scan_map_score=.95,min_obstacle_distance=1.)
     for elapsed,score in ((0,.95),(1,.7),(2.1,.95),(3.,.95)):
         state.scan_map_score=score;node.motion_sample=MotionSample(0,0,0,now+elapsed)
+        node.safety_at=now+elapsed  # fresh safety heartbeat for the simulated tick
         node.step_recovery(state,now+elapsed)
         assert node.phase=='EXECUTING' and node.actions.result is None
 
@@ -255,3 +260,237 @@ def test_local_target_twenty_percent_gate_before_action_event(mission,monkeypatc
     assert (node.phase=='EXECUTING') is accepted
     assert ('ACTION' in events) is accepted
     if not accepted:assert node.phase=='HELP' and 'local-target confidence' in node.reason
+
+
+def test_obstacle_event_aborts_recovery_and_waits(mission):
+    import json
+    from std_msgs.msg import String
+    mission.phase='EXECUTING';mission.owner='RECOVERY';mission.active_action='SPIN'
+    mission.on_safety(String(data=json.dumps(dict(status='BLOCKED',reason='Obstacle in path',latched=True))))
+    assert mission.phase=='SAFETY_WAIT' and mission.owner=='NONE'
+    assert mission.active_action=='NONE'
+
+
+def test_obstacle_event_cancels_nav_and_discards_review_epoch(mission):
+    import json
+    from std_msgs.msg import String
+    mission.phase='NAVIGATING';mission.owner='NAV';mission.nav_send=Future()
+    epoch=mission.nav_epoch
+    mission.on_safety(String(data=json.dumps(dict(status='BLOCKED',reason='Obstacle',latched=True))))
+    assert mission.phase=='CANCELING' and mission.next_phase=='SAFETY_WAIT'
+    assert mission.owner=='NONE' and mission.nav_epoch>epoch
+
+
+def test_safety_wait_has_no_requests_and_times_out(mission):
+    mission.phase='SAFETY_WAIT';now=time.monotonic()
+    mission.safety_wait_started=now-16
+    mission.safety_status=dict(status='BLOCKED',reason='Obstacle',latched=True)
+    before=mission.call_count
+    mission.step_recovery(LocalizationState(),now)
+    assert mission.phase=='HELP' and mission.call_count==before
+
+
+def test_clearance_returns_to_decision_without_motion(mission):
+    mission.phase='SAFETY_WAIT';mission.owner='NONE'
+    before=mission.call_count
+    mission.step_recovery(LocalizationState(),time.monotonic())
+    assert mission.phase=='DECIDING' and mission.owner=='NONE' and mission.call_count==before
+
+
+def test_stale_safety_telemetry_removes_motion_choices(mission):
+    mission.safety_at=0.;mission.localization_ready=True
+    allowed,targets=mission.available(LocalizationState(),time.monotonic())
+    assert allowed==['REQUEST_HELP','STOP'] and not targets
+
+
+def test_bridge_obstacle_stop_flushes_commands_before_release():
+    from jev_localization_recovery.mission_bridge import MissionBridge
+    from jev_localization_recovery.obstacle_safety import ObstacleSafety, SafetyConfig
+    from geometry_msgs.msg import Twist
+    from std_msgs.msg import String
+    rclpy.init(args=[],domain_id=195)
+    node=MissionBridge();sent=[];node.publisher=SimpleNamespace(publish=sent.append)
+    node.safety=ObstacleSafety(SafetyConfig(release_delay=.2))
+    try:
+        node.scan_at=node.odom_at=time.monotonic()
+        node.scan_stamp=node.odom_stamp=node.get_clock().now().nanoseconds*1e-9
+        node.scan_fault=None;node.points=[(.3,0.)]
+        msg=Twist();msg.linear.x=.15
+        node.on_owner(String(data='NAV'));node.store('NAV',msg);node.relay()
+        assert sent[-1].linear.x==0 and not node.commands
+        node.on_owner(String(data='NONE'));node.points=[(3.,0.)];node.relay()
+        time.sleep(.21);node.relay()
+        assert not node.safety.latched
+        node.on_owner(String(data='NAV'));node.relay()
+        assert sent[-1].linear.x==0  # no replay of the previously blocked request
+        node.store('NAV',msg);node.relay();assert sent[-1].linear.x==.15
+        node.odom_at=0.;node.relay()
+        assert sent[-1].linear.x==0 and node.safety.latched
+    finally:node.destroy_node();rclpy.shutdown()
+
+
+def replan_fixture(node):
+    node.nav_started=True;node.goal=(1.,0.,0.);node.localization_ready=True
+    node.monitor.pose=(0.,0.,0.)
+    node.planner=SimpleNamespace(server_is_ready=lambda:True,send_goal_async=lambda goal:Future())
+    node.follower=SimpleNamespace(server_is_ready=lambda:True,send_goal_async=lambda goal:Future())
+    node.replan_reset=SimpleNamespace(publish=lambda msg:None)
+    return time.monotonic()
+
+
+def test_replan_offered_for_blockage_but_not_sensor_fault_or_exhaustion(mission):
+    now=replan_fixture(mission)
+    mission.safety_status=dict(status='BLOCKED',latched=True)
+    assert 'REPLAN_PATH' in mission.available(LocalizationState(),now)[0]
+    mission.safety_status['status']='SENSOR_FAULT'
+    assert 'REPLAN_PATH' not in mission.available(LocalizationState(),now)[0]
+    mission.safety_status['status']='CLEAR';mission.replan_attempts=2
+    assert 'REPLAN_PATH' not in mission.navigation_choices(now)
+
+
+def test_replan_revokes_owner_and_cancels_old_goal_first(mission):
+    now=replan_fixture(mission);mission.phase='NAVIGATING';mission.owner='NAV';mission.nav_send=Future()
+    mission.apply_navigation_review(dict(action='REPLAN_PATH',confidence=.8),LocalizationState(),now)
+    assert mission.owner=='NONE' and mission.phase=='CANCELING'
+    assert mission.next_phase=='REPLAN_START' and mission.replan_attempts==1
+
+
+def test_replan_confidence_gate(mission):
+    now=replan_fixture(mission)
+    mission.execute(dict(action='REPLAN_PATH',confidence=.19),LocalizationState(),now)
+    assert mission.phase=='HELP' and mission.replan_attempts==0
+
+
+def test_replan_starts_planning_without_clearing_costmaps(mission):
+    now=replan_fixture(mission);mission.phase='REPLAN_START';calls=[]
+    mission.clear_clients=[SimpleNamespace(call_async=lambda *a:pytest.fail('Cleared obstacles'))]
+    mission.planner.send_goal_async=lambda goal:calls.append(goal) or Future()
+    mission.step_replan(LocalizationState(),now)
+    assert mission.phase=='REPLANNING' and calls[0].goal.pose.position.x==1.
+    assert mission.owner=='NONE'
+
+
+def replan_response(node,valid=True):
+    from nav_msgs.msg import Path
+    from geometry_msgs.msg import PoseStamped
+    path=Path();path.header.frame_id='map'
+    if valid:
+        for x in (0.,.25,.5,.75,1.):
+            p=PoseStamped();p.header.frame_id='map';p.pose.position.x=x;p.pose.orientation.w=1.;path.poses.append(p)
+    node.phase='REPLANNING';node.nav_result=Future()
+    node.nav_result.set_result(SimpleNamespace(status=4,result=SimpleNamespace(path=path)))
+    return path
+
+
+def test_valid_replan_waits_for_safety_then_executes_exact_path(mission):
+    now=replan_fixture(mission);path=replan_response(mission);sent=[]
+    mission.step_replan(LocalizationState(),now)
+    assert mission.phase=='REPLAN_READY' and mission.owner=='NONE'
+    mission.follower.send_goal_async=lambda goal,**kw:sent.append(goal) or Future()
+    mission.safety_status=dict(status='BLOCKED',latched=True);mission.safety_at=now+2
+    mission.step_replan(LocalizationState(),now+2)
+    assert not sent
+    mission.safety_status=dict(status='CLEAR',latched=False);mission.safety_at=now+3
+    mission.step_replan(LocalizationState(),now+3)
+    assert mission.phase=='NAV_STARTING' and sent[0].path==path and mission.owner=='NONE'
+
+
+def test_invalid_replan_requests_help(mission):
+    now=replan_fixture(mission);replan_response(mission,False)
+    mission.step_replan(LocalizationState(),now)
+    assert mission.phase=='HELP' and mission.owner=='NONE'
+
+
+def test_stop_cancels_late_planner_acceptance(mission):
+    replan_fixture(mission);mission.phase='REPLANNING';mission.nav_send=Future()
+    mission.halt('STOPPED','Test stop');canceled=[];result=Future()
+    mission.nav_send.set_result(SimpleNamespace(accepted=True,get_result_async=lambda:result,
+        cancel_goal_async=lambda:canceled.append(True) or Future()))
+    mission.nav_poll()
+    assert canceled and mission.phase=='CANCELING' and mission.owner=='NONE'
+
+
+def test_bridge_replan_does_not_override_footprint_collision():
+    from jev_localization_recovery.mission_bridge import MissionBridge
+    from std_msgs.msg import String
+    rclpy.init(args=[],domain_id=195);node=MissionBridge()
+    try:
+        node.on_owner(String(data='NONE'));node.odom_at=node.scan_at=time.monotonic()
+        node.odom_stamp=node.scan_stamp=node.get_clock().now().nanoseconds*1e-9
+        node.scan_fault=None;node.points=[(.1,0.)]
+        node.safety.latched=True;node.safety.probe=(.15,0.)
+        node.on_replan_ready(String(data='CHECK_NEW_ROUTE'));node.relay()
+        assert node.safety.latched and node.safety.clear_since is None
+        node.safety.probe=(.15,0.);node.measured=(.1,0.)
+        node.on_replan_ready(String(data='CHECK_NEW_ROUTE'))
+        assert node.safety.probe==(.15,0.)
+    finally:node.destroy_node();rclpy.shutdown()
+
+
+def test_one_blocked_assessment_then_wait_without_periodic_calls(mission):
+    now=replan_fixture(mission);mission.phase='SAFETY_WAIT';mission.safety_wait_started=now
+    mission.safety_status=dict(status='BLOCKED',latched=True,reason='Obstacle')
+    mission.ready_since=now-3
+    calls=[]
+    def request(*args):
+        calls.append(True);mission.set_phase('WAITING_JEV')
+    mission.request_decision=request
+    state=LocalizationState(status=Health.HEALTHY,data_ready=True,pose_uncertainty=.01,scan_map_score=.95)
+    mission.step_recovery(state,now)
+    assert len(calls)==1 and mission.blocked_review and mission.blocked_decision
+    mission.execute(dict(action='PAUSE_NAVIGATION',confidence=.1),state,now)
+    assert mission.phase=='SAFETY_WAIT' and not mission.blocked_decision
+    mission.step_recovery(state,now+.1)
+    assert len(calls)==1
+
+
+def test_stale_follow_path_feedback_is_discarded(mission):
+    epoch=mission.nav_epoch
+    feedback=SimpleNamespace(feedback=SimpleNamespace(distance_to_goal=2.,speed=.1))
+    mission.on_path_feedback(feedback,epoch)
+    assert mission.nav_feedback['distance_remaining_m']==2.
+    mission.nav_epoch+=1;mission.nav_feedback={}
+    mission.on_path_feedback(feedback,epoch)
+    assert not mission.nav_feedback
+
+
+def test_planner_result_exception_stays_stopped(mission):
+    now=replan_fixture(mission);mission.phase='REPLANNING';mission.nav_result=Future()
+    mission.nav_result.set_exception(RuntimeError('Planner transport failed'))
+    mission.step_replan(LocalizationState(),now)
+    assert mission.phase=='HELP' and mission.owner=='NONE'
+
+
+def test_help_ack_waits_for_lock_before_offering_navigation(mission):
+    now=time.monotonic();mission.phase='HELP';mission.nav_started=True
+    mission.goal=(1.,0.,0.);mission.nav=SimpleNamespace(server_is_ready=lambda:True)
+    mission.ack_service(None,Trigger.Response());now=mission.stage_started
+    state=LocalizationState(status=Health.HEALTHY,data_ready=True,pose_uncertainty=.01,
+                            scan_map_score=.93,min_obstacle_distance=.34)
+    mission.safety_at=now;mission.step_recovery(state,now)
+    assert mission.phase=='ACK_RECHECK' and mission.call_count==0
+    mission.safety_at=now+2.2;mission.step_recovery(state,now+2.2)
+    assert mission.phase=='DECIDING' and mission.localization_ready and mission.call_count==0
+    assert 'RESUME_NAVIGATION' in mission.available(state,now+2.2)[0]
+
+
+def test_tuning_rejected_while_navigation_active(mission):
+    from jev_localization_recovery.obstacle_safety import SafetyConfig
+    mission.phase='NAVIGATING';mission.owner='NAV'
+    with pytest.raises(ValueError,match='Stop the mission'):mission.tune_safety(vars(SafetyConfig()))
+
+
+def test_bridge_tuning_is_atomic_and_requires_stopped_robot():
+    from jev_localization_recovery.mission_bridge import MissionBridge
+    from rclpy.parameter import Parameter
+    rclpy.init(args=[],domain_id=195);node=MissionBridge()
+    try:
+        node.owner='NONE';node.owner_at=node.odom_at=time.monotonic()
+        result=node.set_parameters_atomically([Parameter('safety_margin',value=.08),Parameter('safety_radius',value=.1)])
+        assert not result.successful and node.safety.config.margin==.05
+        result=node.set_parameters_atomically([Parameter('safety_margin',value=.08)])
+        assert result.successful and node.safety.config.margin==.08 and node.safety.latched
+        assert node.get_parameter('safety_margin').value==.08
+        node.owner='NAV'
+        assert not node.set_parameters_atomically([Parameter('safety_margin',value=.09)]).successful
+    finally:node.destroy_node();rclpy.shutdown()

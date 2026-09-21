@@ -19,6 +19,7 @@ class Dashboard:
                 self.end_headers(); self.wfile.write(data)
             def do_GET(self):
                 if self.path=='/': self.respond(200,page_path.read_bytes(),'text/html; charset=utf-8')
+                elif self.path=='/safety': self.respond(200,page_path.with_name('safety.html').read_bytes(),'text/html; charset=utf-8')
                 elif self.path=='/api/state': self.respond(200,outer.snapshot.encode())
                 else: self.respond(404,b'{}')
             def do_POST(self):
@@ -29,7 +30,7 @@ class Dashboard:
                     length=int(self.headers.get('Content-Length','0'))
                     if not 0<length<=2048: raise ValueError()
                     body=json.loads(self.rfile.read(length))
-                    if self.path!='/api/command' or body.get('command') not in ('start','stop','inject','ack'):
+                    if self.path!='/api/command' or body.get('command') not in ('start','stop','inject','ack','tune_safety'):
                         raise ValueError()
                     commands.put_nowait(body)
                     self.respond(202,b'{"queued":true}')

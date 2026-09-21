@@ -5,7 +5,7 @@ Nav2/AMCL source. The regular tests cover scoring geometry, covariance, health,
 decision selection, motion safety, backtrack history, DDS/TF transport, recovery
 evaluation, cooldowns, STOP/reset, and command ownership.
 
-Latest `colcon test` result: **90 passed, 2 opt-in tests skipped**, zero failures.
+Latest `colcon test` result: **127 passed, 2 opt-in tests skipped**, zero failures.
 This includes the Jev response schema, HTTP adapter, asynchronous decisions,
 timeouts, stale responses, sensor loss, confidence threshold, and attempt limit.
 The Gazebo recovery and mission end-to-end checks were run separately.
@@ -104,3 +104,55 @@ local targets as executed actions. Spin stages of all three rotation recoveries
 now finish after two seconds of stable navigation-quality localization; tests
 also verify that brief or weak locks do not finish a spin. These changes passed
 the regular suite above; they have not yet been validated in a full random mission.
+
+## Shared obstacle safety
+
+The feature adds geometry and runtime tests for forward, reverse, spin, curved
+motion, measured velocity, proportional slowdown, invalid lidar sectors, stale
+evidence, ownership revocation, cancellation, and command flushing before release.
+
+The known-pose Gazebo fixture with live Jev navigation passed. A newly inserted
+obstacle caused a BLOCKED state observed about **0.30 s** after insertion. Minimum
+sampled geometric clearance was **0.029 m** using the configured robot radius and
+a circumscribed radius for the box. The mission revoked ownership and stayed in
+SAFETY_WAIT with zero commands and no additional Jev calls during the measured
+wait. The fixture stopped the mission and removed its obstacle afterward.
+
+Evidence: [obstacle check](mission-runs/obstacle-check.json). The detection timing
+includes dashboard polling and is not a direct command-loop latency measurement.
+Clearance is sampled geometry, not contact-sensor evidence. Braking parameters
+remain simulation assumptions. A complete random-start mission with delocalization
+has not been rerun after this feature; physical hardware and moving-obstacle
+prediction remain outside the validated scope.
+
+## Explicit route replanning
+
+Eleven additional ROS runtime tests cover action availability, sensor-fault veto,
+confidence, bounded attempts, cancellation before planning, preservation of
+costmaps, invalid paths, exact-path execution after safety clearance, late planner
+acceptance after STOP, footprint collision protection, one blocked assessment,
+and stale controller feedback. The full suite passes with **124 passed, 2 skipped**.
+The earlier obstacle report predates the one-assessment replanning policy. A full
+live mission with Jev selecting REPLAN_PATH has not yet been verified.
+
+## Safety tuning window and help-loop regression
+
+The full suite passed with **127 passed, 2 skipped**. Added coverage reproduces
+healthy AMCL with approximately 0.34 m obstacle clearance after help acknowledgment,
+verifying that no Jev call is made during the fresh-lock wait and navigation becomes
+available afterward. Parameter tests verify stopped-only updates, atomic rejection,
+active ROS parameter agreement, and clearance rechecking after changes.
+
+A live HTTP-to-ROS update changed the margin from 0.05 to 0.06 m while IDLE with
+zero applied velocity. A radius of 0.10 m was rejected without changing the active
+configuration. All eight default values were restored, and safety returned CLEAR.
+The separate page rendered eight editable fields and active values in Chrome;
+Apply was disabled when the mission became active. The help-loop fix has automated
+regression coverage; a complete live help/acknowledge/resume cycle remains unverified.
+
+## Integrated safety settings tab
+
+The control panel now contains Mission control and Safety settings tabs with
+keyboard navigation and hash links. Browser verification confirmed eight settings
+inputs, live active values, and correct panel visibility on the safety tab. The
+settings use the existing stopped-only update endpoint; backend behavior is unchanged.

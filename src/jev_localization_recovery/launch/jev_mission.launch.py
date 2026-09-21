@@ -43,7 +43,7 @@ def generate_launch_description():
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager', name='localization_manager',
              parameters=[{'use_sim_time': True, 'autostart': True, 'node_names': ['map_server', 'amcl']}]),
         Node(package='jev_localization_recovery', executable='mission_bridge',
-             parameters=[{'use_sim_time': True}], output='screen'),
+             parameters=[os.path.join(share, 'config', 'obstacle_safety.yaml'), {'use_sim_time': True}], output='screen'),
         Node(package='jev_localization_recovery', executable='mission_node', name='jev_recovery', output='screen',
              parameters=[os.path.join(share, 'config', 'recovery_params.yaml'),
                          {'use_sim_time': True, 'enable_recovery': LaunchConfiguration('enable_recovery'),

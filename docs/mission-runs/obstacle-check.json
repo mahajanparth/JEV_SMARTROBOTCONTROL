@@ -1,0 +1,36 @@
+{
+  "fixture": "Known-pose AMCL, live Jev navigation, static obstacle insertion",
+  "success": true,
+  "obstacle_xy": [
+    4.391011889507333,
+    2.3811270355467067
+  ],
+  "minimum_geometric_clearance_m": 0.029132609497282663,
+  "block_detected_after_insertion_s": 0.30042455999864615,
+  "jev_calls_at_block": 36,
+  "phase": "SAFETY_WAIT",
+  "safety": {
+    "status": "BLOCKED",
+    "reason": "Obstacle intersects stopping envelope",
+    "clearance_m": -0.10195522558535035,
+    "scale": 0.0,
+    "requested": [
+      0.0,
+      0.0
+    ],
+    "applied": [
+      0.0,
+      0.0
+    ],
+    "latched": true,
+    "owner": "NONE",
+    "scan_age_seconds": -0.04099999999999682,
+    "odom_age_seconds": -0.015999999999998238,
+    "command_valid": false,
+    "measured": [
+      -7.389062148263536e-05,
+      0.0008187932002852538
+    ]
+  },
+  "final_owner": "NONE"
+}

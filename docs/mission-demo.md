@@ -49,6 +49,7 @@ Nav2 cancellation; cancellation must finish before another mission can start.
 | GLOBAL_RELOCALIZE | AMCL global reset then rotation; bounded retries |
 | BACKTRACK_AND_SPIN | Reverse only over verified recent straight forward history, then rotate |
 | MOVE_LOCAL | Turn and drive to an odometry-relative target; X forward, Y left; maximum target distance 0.5 m |
+| REPLAN_PATH | Cancel navigation, compute a replacement route without clearing obstacles, then follow the validated route subject to safety clearance |
 | CONTINUE_NAVIGATION | Keep the existing Nav2 goal running after a periodic Jev review |
 | NAVIGATE_TO_GOAL | Start Nav2 after stable localization |
 | PAUSE_NAVIGATION | Remain stopped briefly at a decision point, then reassess |
@@ -143,7 +144,8 @@ Inputs include estimated pose, measured velocity, Nav2 distance/time feedback an
 its age, distance to goal, distance from the planned route, command owner, current
 action, and recent samples of scan agreement, uncertainty, clearance and progress.
 No simulator ground truth or API key enters these requests. Reviews offer
-`CONTINUE_NAVIGATION`, `PAUSE_NAVIGATION`, `REQUEST_HELP`, and `STOP`.
+`CONTINUE_NAVIGATION`, `PAUSE_NAVIGATION`, `REQUEST_HELP`, and `STOP`, plus
+`REPLAN_PATH` when localization, sensor evidence, server availability, and attempt budget permit.
 
 Continue preserves the current goal. Pause revokes motion, cancels Nav2, and waits
 for cancellation before requesting the next mission decision. Help and stop also
@@ -172,7 +174,7 @@ startup still uses unknown-pose global localization. Its report is
 
 ## Reading the action probability panel
 
-The chart lists all ten actions, ranks the actions offered in the latest reviewed
+The chart lists all eleven actions, ranks the actions offered in the latest reviewed
 call by probability, and highlights the maximum (including ties). Actions absent
 from that call are marked **Not offered**, not zero probability. The selected
 action and model confidence have separate summary cards. Confidence is not the
@@ -191,3 +193,123 @@ periodic review rate; recovery shows **Executing Jev decision**; evaluation show
 execution and evaluation retain continuous local safety/health monitoring without
 periodic Jev calls. Waiting, paused, stopped, help, and completed stages each have
 an explicit explanation instead of an ambiguous “inactive” label.
+
+## Obstacle safety and simulation tests
+
+`mission_bridge.py` is the sole final velocity publisher. `obstacle_safety.py`
+checks a swept circular footprint for the requested and measured motion, and
+scales linear and angular speeds together when slowing. Conservative full-scan
+validation treats NaN, zero, negative, out-of-range, incomplete, or stale evidence
+as a fault. Valid positive infinity represents clear space only to the finite
+sensor maximum. Laser points use a scan-time transform into `base_footprint`.
+
+The shared configuration is `config/obstacle_safety.yaml`: radius 0.18 m, margin
+0.05 m, braking assumption 0.3 m/s², reaction allowance 0.15 s plus scan age,
+slowdown band 0.25 m, sensor timeout 0.5 s, and release delay 1 s. The stopping
+sweep conservatively retains constant velocity for the full braking interval.
+These values require separate measurement and validation before hardware use.
+
+`/demo/safety` reports status, reason, envelope clearance, scan/odometry age,
+requested/applied velocity, owner, and latch state. Status changes appear as
+SAFETY events. `SAFETY_WAIT` permits one Jev assessment for replanning or waiting when localization and sensors are reliable. It does not run periodic reviews; after 15 s,
+the mission requests help. Old commands are flushed, outstanding navigation
+reviews are invalidated, and navigation cancellation must complete before Jev
+reassesses. Existing recovery clearance checks still apply. Faults cannot be
+cleared by model confidence or an operator acknowledgment alone.
+
+Insert a test-owned 0.2 × 0.2 × 0.5 m static box ahead of the robot, only where
+fresh forward scan evidence shows sufficient clearance:
+
+```bash
+docker exec jev-mission bash -lc \
+  'source /opt/ros/humble/setup.bash && source /ws/install_mission/setup.bash && python3 scripts/obstacle_fixture.py insert --distance 0.65'
+
+docker exec jev-mission bash -lc \
+  'source /opt/ros/humble/setup.bash && source /ws/install_mission/setup.bash && python3 scripts/obstacle_fixture.py remove'
+```
+
+This helper changes Gazebo geometry, not the AMCL pose. It only removes its named
+`jev_safety_test_obstacle`; existing objects are not deleted. Nav2 may avoid a box
+placed far enough away without the final gate needing to stop the robot.
+
+For an automated check, start the demo idle and run:
+
+```bash
+docker exec jev-mission bash -lc \
+  'source /opt/ros/humble/setup.bash && source /ws/install_mission/setup.bash && python3 scripts/check_obstacle_safety.py'
+```
+
+This uses an explicit known-pose AMCL fixture, real Jev navigation, and a box
+inserted 0.4 m ahead while moving. It checks a BLOCKED state, revoked ownership,
+zero commands, positive sampled geometric clearance, and at most one new Jev assessment during
+the blocked wait. Finally it stops the mission and removes its obstacle. The report
+is `docs/mission-runs/obstacle-check.json`. The fixture does not prove arbitrary
+moving-obstacle avoidance or unknown-pose localization, and uses geometric
+separation rather than a Gazebo contact sensor.
+
+## Jev-controlled route replanning
+
+`REPLAN_PATH` is offered during navigation or after an obstacle stop when
+localization is ready, safety telemetry is fresh, and the planner/controller are
+available. It shares the 20% confidence threshold and has a limit of two attempts
+per mission. Sensor faults do not permit replanning. A blocked episode permits
+one assessment after cancellation; choosing pause returns to waiting without
+periodic requests. Obstacles alone do not call for global AMCL initialization.
+
+The robot first revokes ownership and cancels its active goal. Nav2's
+`ComputePathToPose` then plans while stationary using current costmaps. This action
+never clears obstacle observations. The response must succeed, contain a finite,
+continuous map-frame route, start near the estimate, and end near the original
+goal. Planning times out after eight seconds. Invalid/no-path results request help.
+
+A valid route does not enable motion. The bridge may discard the previous blocked
+trajectory only while the owner is NONE and measured motion is near zero. It
+still requires valid sensors, footprint clearance, and sustained-clearance delay.
+Every new command is checked against its own stopping envelope. Safe departure
+must be available within five seconds; otherwise the mission requests help.
+`FollowPath` executes the exact validated replacement route, with Jev supervision.
+
+The navigation behavior trees now compute once per goal instead of automatically
+replanning every second. `RESUME_NAVIGATION` remains a restart after interruption;
+`REPLAN_PATH` is an explicit route-replacement decision with its own attempt budget.
+The dashboard shows its probability when offered, attempt count, result, and route.
+
+## Live safety tuning and help acknowledgment
+
+Select **Safety settings** in the control panel tabs, or click **Tune safety settings**
+in the Obstacle safety section. You can also open [the safety tab](http://localhost:8765/#safety).
+Switch back to **Mission control** to view the map and Jev decisions. Mission status
+and stop controls stay visible above both tabs; switching preserves unsaved edits.
+The old `/safety` address redirects to the safety tab.
+It displays the active values reported by the bridge alongside editable values:
+
+| Setting | Units | Allowed range |
+| --- | --- | --- |
+| Robot radius | m | 0.18 to 0.35 |
+| Extra clearance margin | m | 0.02 to 0.30 |
+| Assumed braking deceleration | m/s² | 0.05 to 2.0 |
+| Reaction allowance | s | 0.05 to 1.0 |
+| Slowdown band | m | 0.05 to 1.0 |
+| Scan and odometry timeout | s | 0.10 to 0.75 |
+| Sustained-clearance release delay | s | 0.20 to 5.0 |
+| Blocked wait before operator help | s | 2 to 120 |
+
+Use **Stop mission** before applying changes, or tune while IDLE, HELP, or SUCCEEDED.
+The server also checks that no goal or update is pending. The bridge independently
+requires fresh stopped odometry and owner NONE. Updates are applied atomically;
+an invalid value rejects the whole update. Applied changes discard old commands
+and trigger a fresh clearance check. **Reload active values** discards unsaved
+edits in the settings tab. Changes last only for the current session; edit
+`config/obstacle_safety.yaml` for defaults used on restart.
+
+Increasing assumed braking strength shortens the stopping envelope; increasing
+the sensor timeout accepts older data. These are simulation tuning controls.
+Existing recovery-specific spin/rear clearance limits remain separate YAML settings.
+
+After **Intervention complete: reassess**, the mission now enters ACK_RECHECK and
+waits for fresh localization checks before asking Jev again. Previously it reset
+the stable-lock timer but immediately called Jev, temporarily hiding navigation
+and creating a repeated REQUEST_HELP loop near obstacles. HELP now explicitly
+requires acknowledgment instead of labeling REQUEST_HELP as an available next
+choice. An obstacle, stale sensor, or genuinely unreliable localization can still
+prevent motion after acknowledgment.

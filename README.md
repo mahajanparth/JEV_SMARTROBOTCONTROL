@@ -128,6 +128,7 @@ and expires stale commands.
 | `BACKTRACK_AND_SPIN` | Reverse along verified recent straight motion, then rotate |
 | `MOVE_LOCAL` | Turn and drive to a safe robot-relative X/Y target within 0.5 m |
 | `NAVIGATE_TO_GOAL` | Start Nav2 after stable localization |
+| `REPLAN_PATH` | Stop, compute and validate a new route to the same goal, then follow it subject to safety clearance |
 | `CONTINUE_NAVIGATION` | Keep the existing goal running |
 | `PAUSE_NAVIGATION` | Cancel navigation and pause before reassessing |
 | `RESUME_NAVIGATION` | Replan to the same destination after recovery |
@@ -146,6 +147,29 @@ Spin stages finish early after **two seconds** of continuous navigation-quality
 localization: fresh data, healthy status, uncertainty below **0.35**, and scan/map
 agreement at least **0.85**. A HEALTHY label alone does not meet this stricter
 condition. The robot then stops for the normal four-second recovery evaluation.
+
+## Obstacle safety
+
+All navigation and recovery commands pass through a shared 20 Hz obstacle filter.
+It checks a circular robot footprint along the commanded and measured motion,
+including a conservative stopping envelope. Commands slow near obstacles and stop
+when the envelope is blocked, lidar coverage is invalid, or scan/odometry evidence
+is stale. It uses scan-time transforms and requires full 360-degree lidar coverage.
+
+The dashboard shows `CLEAR`, `SLOW`, `BLOCKED`, or `SENSOR_FAULT`, the reason,
+envelope clearance, and requested versus applied velocity. A blocked action revokes
+motion ownership and cancels navigation or aborts recovery. Jev receives safety
+telemetry, but cannot override the filter. No periodic Jev calls run in `SAFETY_WAIT`. One bounded assessment may offer replanning when localization and sensor evidence are reliable.
+After sustained clearance and cancellation, Jev decides the next action; buffered
+commands are discarded. A blockage lasting 15 seconds requests operator help.
+
+Tune the simulation assumptions in
+`src/jev_localization_recovery/config/obstacle_safety.yaml`. The footprint radius is
+0.18 m plus a 0.05 m margin. Reaction allowance is 0.15 s plus scan age; assumed
+braking deceleration is 0.3 m/s². These are conservative simulation settings, not
+measured hardware guarantees. The filter does not estimate obstacle velocities.
+See the [mission guide](docs/mission-demo.md#obstacle-safety-and-simulation-tests)
+for obstacle insertion and the live validation command.
 
 ## Test delocalization
 
@@ -218,7 +242,7 @@ PYTHONPATH=src/jev_localization_recovery python3 -m pytest -q src/jev_localizati
 ```
 
 ROS tests skip when their dependencies are unavailable. The latest recorded full
-Humble result is **90 passed, 2 opt-in tests skipped**. See
+Humble result is **127 passed, 2 opt-in tests skipped**. See
 [validation notes](docs/validation.md) for tested scenarios and remaining limits.
 
 To run a live random mission with an injected localization failure, start the
@@ -261,3 +285,70 @@ Local movement and backtracking have automated coverage but have not both been
 demonstrated as Jev-selected actions in a complete live mission. The latest
 stable-lock spin change has automated coverage, not full random-mission validation.
 This project is a simulation demo; physical robot operation has not been validated.
+
+## Jev-controlled route replanning
+
+`REPLAN_PATH` is offered during navigation or after an obstacle stop when
+localization is ready, safety telemetry is fresh, and the planner/controller are
+available. It shares the 20% confidence threshold and has a limit of two attempts
+per mission. Sensor faults do not permit replanning. A blocked episode permits
+one assessment after cancellation; choosing pause returns to waiting without
+periodic requests. Obstacles alone do not call for global AMCL initialization.
+
+The robot first revokes ownership and cancels its active goal. Nav2's
+`ComputePathToPose` then plans while stationary using current costmaps. This action
+never clears obstacle observations. The response must succeed, contain a finite,
+continuous map-frame route, start near the estimate, and end near the original
+goal. Planning times out after eight seconds. Invalid/no-path results request help.
+
+A valid route does not enable motion. The bridge may discard the previous blocked
+trajectory only while the owner is NONE and measured motion is near zero. It
+still requires valid sensors, footprint clearance, and sustained-clearance delay.
+Every new command is checked against its own stopping envelope. Safe departure
+must be available within five seconds; otherwise the mission requests help.
+`FollowPath` executes the exact validated replacement route, with Jev supervision.
+
+The navigation behavior trees now compute once per goal instead of automatically
+replanning every second. `RESUME_NAVIGATION` remains a restart after interruption;
+`REPLAN_PATH` is an explicit route-replacement decision with its own attempt budget.
+The dashboard shows its probability when offered, attempt count, result, and route.
+
+## Live safety tuning and help acknowledgment
+
+Select **Safety settings** in the control panel tabs, or click **Tune safety settings**
+in the Obstacle safety section. You can also open [the safety tab](http://localhost:8765/#safety).
+Switch back to **Mission control** to view the map and Jev decisions. Mission status
+and stop controls stay visible above both tabs; switching preserves unsaved edits.
+The old `/safety` address redirects to the safety tab.
+It displays the active values reported by the bridge alongside editable values:
+
+| Setting | Units | Allowed range |
+| --- | --- | --- |
+| Robot radius | m | 0.18 to 0.35 |
+| Extra clearance margin | m | 0.02 to 0.30 |
+| Assumed braking deceleration | m/s² | 0.05 to 2.0 |
+| Reaction allowance | s | 0.05 to 1.0 |
+| Slowdown band | m | 0.05 to 1.0 |
+| Scan and odometry timeout | s | 0.10 to 0.75 |
+| Sustained-clearance release delay | s | 0.20 to 5.0 |
+| Blocked wait before operator help | s | 2 to 120 |
+
+Use **Stop mission** before applying changes, or tune while IDLE, HELP, or SUCCEEDED.
+The server also checks that no goal or update is pending. The bridge independently
+requires fresh stopped odometry and owner NONE. Updates are applied atomically;
+an invalid value rejects the whole update. Applied changes discard old commands
+and trigger a fresh clearance check. **Reload active values** discards unsaved
+edits in the settings tab. Changes last only for the current session; edit
+`config/obstacle_safety.yaml` for defaults used on restart.
+
+Increasing assumed braking strength shortens the stopping envelope; increasing
+the sensor timeout accepts older data. These are simulation tuning controls.
+Existing recovery-specific spin/rear clearance limits remain separate YAML settings.
+
+After **Intervention complete: reassess**, the mission now enters ACK_RECHECK and
+waits for fresh localization checks before asking Jev again. Previously it reset
+the stable-lock timer but immediately called Jev, temporarily hiding navigation
+and creating a repeated REQUEST_HELP loop near obstacles. HELP now explicitly
+requires acknowledgment instead of labeling REQUEST_HELP as an available next
+choice. An obstacle, stale sensor, or genuinely unreliable localization can still
+prevent motion after acknowledgment.
