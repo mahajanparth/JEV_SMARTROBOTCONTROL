@@ -2,6 +2,11 @@
 from dataclasses import dataclass
 import math
 
+# Bounds are shared by ROS validation and the dashboard. Radius cannot undercut Nav2.
+SAFETY_LIMITS = dict(radius=(.18,.35), margin=(.02,.3), braking=(.05,2.),
+                     reaction=(.05,1.), slowdown=(.05,1.), sensor_timeout=(.1,.75),
+                     release_delay=(.2,5.), blocked_timeout=(2.,120.))
+
 @dataclass(frozen=True)
 class SafetyConfig:
     radius: float = .18
@@ -10,11 +15,14 @@ class SafetyConfig:
     reaction: float = .15
     slowdown: float = .25
     sensor_timeout: float = .5
+    blocked_timeout: float = 15.
     release_delay: float = 1.
 
     def __post_init__(self):
         if any(not math.isfinite(v) or v <= 0 for v in vars(self).values()):
             raise ValueError('Safety parameters must be finite and positive')
+        for key,(low,high) in SAFETY_LIMITS.items():
+            if not low<=getattr(self,key)<=high:raise ValueError(f'{key} must be {low}..{high}')
 
 
 def scan_points(ranges, angle_min, increment, range_min, range_max, transform):

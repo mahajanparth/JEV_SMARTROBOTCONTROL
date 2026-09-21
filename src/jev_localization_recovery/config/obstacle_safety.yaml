@@ -9,3 +9,4 @@ jev_gazebo_support:
     safety_slowdown: 0.25  # metres beyond the stopping envelope
     safety_sensor_timeout: 0.5  # seconds for scan and odometry
     safety_release_delay: 1.0  # seconds of sustained clearance
+    safety_blocked_timeout: 15.0  # seconds before requesting operator help

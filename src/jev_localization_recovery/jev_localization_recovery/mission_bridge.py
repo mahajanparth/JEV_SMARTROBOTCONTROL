@@ -4,13 +4,14 @@ import math
 import time
 import rclpy
 from rclpy.time import Time
+from rcl_interfaces.msg import SetParametersResult
 from std_msgs.msg import String
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from tf2_ros import Buffer, TransformListener
 from .gazebo_support import GazeboSupport
-from .obstacle_safety import ObstacleSafety, SafetyConfig, scan_points
+from .obstacle_safety import ObstacleSafety, SafetyConfig, SAFETY_LIMITS, scan_points
 
 class MissionBridge(GazeboSupport):
     def __init__(self):
@@ -24,6 +25,7 @@ class MissionBridge(GazeboSupport):
         self.owner,self.owner_at='NONE',0.;self.commands={}
         self.scan_at=0.;self.scan_stamp=None;self.points=None;self.scan_fault='Waiting for scan and TF'
         self.odom_at=0.;self.measured=(0.,0.);self.odom_stamp=None
+        self.add_on_set_parameters_callback(self.configure_safety)
         self.safety_pub=self.create_publisher(String,'/demo/safety',10)
         self.create_subscription(String,'/demo/owner',self.on_owner,10)
         self.create_subscription(String,'/demo/replan_ready',self.on_replan_ready,10)
@@ -31,6 +33,21 @@ class MissionBridge(GazeboSupport):
         from rclpy.qos import qos_profile_sensor_data
         self.create_subscription(LaserScan,'/scan',self.scan,qos_profile_sensor_data)
         self.create_subscription(Odometry,'/odom',self.on_odom,qos_profile_sensor_data)
+
+    def configure_safety(self,parameters):
+        updates={p.name[7:]:p.value for p in parameters if p.name.startswith('safety_')}
+        if not updates:return SetParametersResult(successful=True)
+        if set(updates)-set(SAFETY_LIMITS):return SetParametersResult(successful=False,reason='Unknown safety parameter')
+        now=time.monotonic()
+        if (self.owner!='NONE' or now-self.owner_at>.4 or now-self.odom_at>.5 or
+                abs(self.measured[0])>.01 or abs(self.measured[1])>.03):
+            return SetParametersResult(successful=False,reason='Fresh stopped robot and owner NONE required')
+        try:
+            if any(isinstance(v,bool) or not isinstance(v,(int,float)) for v in updates.values()):raise ValueError('Numeric values required')
+            config=SafetyConfig(**{**vars(self.safety.config),**updates})
+        except (ValueError,TypeError) as exc:return SetParametersResult(successful=False,reason=str(exc))
+        self.commands.clear();self.safety=ObstacleSafety(config);self.safety.latched=True
+        return SetParametersResult(successful=True,reason='Safety settings applied; rechecking clearance')
 
     def on_replan_ready(self,msg):
         # Discard only the old trajectory, never sensor faults or footprint checks.
@@ -91,7 +108,7 @@ class MissionBridge(GazeboSupport):
         if valid and not state['latched']:
             applied.linear.x,applied.angular.z=state['applied']
         state['applied']=[applied.linear.x,applied.angular.z]
-        state.update(owner=self.owner,scan_age_seconds=scan_age,odom_age_seconds=odom_age,
+        state.update(parameters=vars(self.safety.config),parameter_limits=SAFETY_LIMITS,owner=self.owner,scan_age_seconds=scan_age,odom_age_seconds=odom_age,
                      command_valid=valid,measured=list(self.measured))
         self.publisher.publish(applied)
         self.safety_pub.publish(String(data=json.dumps(state,allow_nan=False)))
