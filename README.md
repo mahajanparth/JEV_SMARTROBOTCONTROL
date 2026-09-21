@@ -128,6 +128,7 @@ and expires stale commands.
 | `BACKTRACK_AND_SPIN` | Reverse along verified recent straight motion, then rotate |
 | `MOVE_LOCAL` | Turn and drive to a safe robot-relative X/Y target within 0.5 m |
 | `NAVIGATE_TO_GOAL` | Start Nav2 after stable localization |
+| `REPLAN_PATH` | Stop, compute and validate a new route to the same goal, then follow it subject to safety clearance |
 | `CONTINUE_NAVIGATION` | Keep the existing goal running |
 | `PAUSE_NAVIGATION` | Cancel navigation and pause before reassessing |
 | `RESUME_NAVIGATION` | Replan to the same destination after recovery |
@@ -158,7 +159,7 @@ is stale. It uses scan-time transforms and requires full 360-degree lidar covera
 The dashboard shows `CLEAR`, `SLOW`, `BLOCKED`, or `SENSOR_FAULT`, the reason,
 envelope clearance, and requested versus applied velocity. A blocked action revokes
 motion ownership and cancels navigation or aborts recovery. Jev receives safety
-telemetry, but cannot override the filter. No periodic Jev calls run in `SAFETY_WAIT`.
+telemetry, but cannot override the filter. No periodic Jev calls run in `SAFETY_WAIT`. One bounded assessment may offer replanning when localization and sensor evidence are reliable.
 After sustained clearance and cancellation, Jev decides the next action; buffered
 commands are discarded. A blockage lasting 15 seconds requests operator help.
 
@@ -241,7 +242,7 @@ PYTHONPATH=src/jev_localization_recovery python3 -m pytest -q src/jev_localizati
 ```
 
 ROS tests skip when their dependencies are unavailable. The latest recorded full
-Humble result is **113 passed, 2 opt-in tests skipped**. See
+Humble result is **124 passed, 2 opt-in tests skipped**. See
 [validation notes](docs/validation.md) for tested scenarios and remaining limits.
 
 To run a live random mission with an injected localization failure, start the
@@ -284,3 +285,30 @@ Local movement and backtracking have automated coverage but have not both been
 demonstrated as Jev-selected actions in a complete live mission. The latest
 stable-lock spin change has automated coverage, not full random-mission validation.
 This project is a simulation demo; physical robot operation has not been validated.
+
+## Jev-controlled route replanning
+
+`REPLAN_PATH` is offered during navigation or after an obstacle stop when
+localization is ready, safety telemetry is fresh, and the planner/controller are
+available. It shares the 20% confidence threshold and has a limit of two attempts
+per mission. Sensor faults do not permit replanning. A blocked episode permits
+one assessment after cancellation; choosing pause returns to waiting without
+periodic requests. Obstacles alone do not call for global AMCL initialization.
+
+The robot first revokes ownership and cancels its active goal. Nav2's
+`ComputePathToPose` then plans while stationary using current costmaps. This action
+never clears obstacle observations. The response must succeed, contain a finite,
+continuous map-frame route, start near the estimate, and end near the original
+goal. Planning times out after eight seconds. Invalid/no-path results request help.
+
+A valid route does not enable motion. The bridge may discard the previous blocked
+trajectory only while the owner is NONE and measured motion is near zero. It
+still requires valid sensors, footprint clearance, and sustained-clearance delay.
+Every new command is checked against its own stopping envelope. Safe departure
+must be available within five seconds; otherwise the mission requests help.
+`FollowPath` executes the exact validated replacement route, with Jev supervision.
+
+The navigation behavior trees now compute once per goal instead of automatically
+replanning every second. `RESUME_NAVIGATION` remains a restart after interruption;
+`REPLAN_PATH` is an explicit route-replacement decision with its own attempt budget.
+The dashboard shows its probability when offered, attempt count, result, and route.

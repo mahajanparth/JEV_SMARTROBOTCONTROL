@@ -5,7 +5,7 @@ Nav2/AMCL source. The regular tests cover scoring geometry, covariance, health,
 decision selection, motion safety, backtrack history, DDS/TF transport, recovery
 evaluation, cooldowns, STOP/reset, and command ownership.
 
-Latest `colcon test` result: **113 passed, 2 opt-in tests skipped**, zero failures.
+Latest `colcon test` result: **124 passed, 2 opt-in tests skipped**, zero failures.
 This includes the Jev response schema, HTTP adapter, asynchronous decisions,
 timeouts, stale responses, sensor loss, confidence threshold, and attempt limit.
 The Gazebo recovery and mission end-to-end checks were run separately.
@@ -124,3 +124,13 @@ Clearance is sampled geometry, not contact-sensor evidence. Braking parameters
 remain simulation assumptions. A complete random-start mission with delocalization
 has not been rerun after this feature; physical hardware and moving-obstacle
 prediction remain outside the validated scope.
+
+## Explicit route replanning
+
+Eleven additional ROS runtime tests cover action availability, sensor-fault veto,
+confidence, bounded attempts, cancellation before planning, preservation of
+costmaps, invalid paths, exact-path execution after safety clearance, late planner
+acceptance after STOP, footprint collision protection, one blocked assessment,
+and stale controller feedback. The full suite passes with **124 passed, 2 skipped**.
+The earlier obstacle report predates the one-assessment replanning policy. A full
+live mission with Jev selecting REPLAN_PATH has not yet been verified.
