@@ -57,6 +57,10 @@ class MissionNode(RecoveryNode):
         self.nav_started=False; self.nav_bad_since=None; self.nav_failures=0; self.local_attempts=0
         self.pause_count=0; self.next_phase='DECIDING'; self.last_ui=0.; self.path=[]
         self.injections=[]; self.report=None; self.eval_future=None; self.spin_lock_since=None
+        self.safety_status={'status':'SENSOR_FAULT','reason':'Waiting for safety bridge'}
+        self.safety_at=0.; self.safety_wait_started=None
+        self.declare_parameter('safety_blocked_timeout',15.)
+        self.create_subscription(String,'/demo/safety',self.on_safety,10)
         self.owner_pub=self.create_publisher(String,'/demo/owner',10)
         self.demo_pub=self.create_publisher(String,'/demo/state',10)
         self.demo_events=self.create_publisher(String,'/demo/events',10)
@@ -76,6 +80,24 @@ class MissionNode(RecoveryNode):
         self.dashboard=Dashboard(self.commands,int(self.get_parameter('dashboard_port').value))
         self.auto=bool(self.get_parameter('autostart').value)
         self.emit('READY',reason='Jev mission controller ready')
+
+    def on_safety(self,msg):
+        try:
+            state=json.loads(msg.data)
+            if state.get('status') not in ('CLEAR','SLOW','BLOCKED','SENSOR_FAULT'):return
+        except (ValueError,AttributeError):return
+        changed=(state.get('status'),state.get('reason'))!=(self.safety_status.get('status'),self.safety_status.get('reason'))
+        self.safety_status=state;self.safety_at=time.monotonic()
+        if changed:self.emit('SAFETY',**state)
+        if state['status'] in ('BLOCKED','SENSOR_FAULT') and self.phase in ('NAVIGATING','EXECUTING','NAV_STARTING','PREPARING_NAV','WAITING_JEV'):
+            self.safety_wait_started=time.monotonic()
+            self.halt('SAFETY_WAIT','Obstacle safety: '+state.get('reason','Motion blocked'))
+            self.owner_pub.publish(String(data='NONE'))
+
+    def safety_snapshot(self,now):
+        if now-self.safety_at>.5:
+            return dict(status='SENSOR_FAULT',reason='Safety bridge telemetry stale',latched=True)
+        return self.safety_status
 
     def emit(self,event,**fields):
         data=dict(event=event,time=round(time.monotonic()-self.started,3),**fields)
@@ -203,6 +225,7 @@ class MissionNode(RecoveryNode):
 
     def available(self,state,now):
         allowed=['REQUEST_HELP','STOP']; targets={}
+        if self.safety_snapshot(now)['status'] not in ('CLEAR','SLOW'):return allowed,targets
         if self.localization_ready:
             if self.nav.server_is_ready(): allowed.insert(0,'RESUME_NAVIGATION' if self.nav_started else 'NAVIGATE_TO_GOAL')
             if self.pause_count<2: allowed.append('PAUSE_NAVIGATION')
@@ -230,7 +253,7 @@ class MissionNode(RecoveryNode):
             self.emit('DISCARDED',purpose='NAVIGATION_SUPERVISION',call_id=call_id,reason='Navigation ended')
         self.supervision_requests.clear()
         allowed,targets=self.available(state,now)
-        context=dict(robot=state.to_dict(),mission=dict(goal=self.goal,navigation_started=self.nav_started,
+        context=dict(robot=state.to_dict(),safety=self.safety_snapshot(now),mission=dict(goal=self.goal,navigation_started=self.nav_started,
             navigation_failures=self.nav_failures,local_move_attempts=self.local_attempts),
             localization_ready=self.localization_ready,last_outcome=self.reason,
             allowed_actions=allowed,local_targets=targets)
@@ -313,7 +336,7 @@ class MissionNode(RecoveryNode):
             route_deviation_m=route_deviation(pose,self.path))
         if not self.telemetry_history or sample['time_seconds']-self.telemetry_history[-1]['time_seconds']>=.5:
             self.telemetry_history.append(sample)
-        return dict(estimated_pose=pose,velocity=velocity,**sample,
+        return dict(estimated_pose=pose,velocity=velocity,safety=self.safety_snapshot(now),**sample,
             nav2_feedback=self.nav_feedback,feedback_age_seconds=now-self.nav_feedback_at if self.nav_feedback_at else None,
             recent_samples=list(self.telemetry_history),owner=self.owner,active_action=self.active_action,
             elapsed_on_current_goal_seconds=now-self.stage_started)
@@ -442,6 +465,19 @@ class MissionNode(RecoveryNode):
             if self.ready_since is None:self.ready_since=now
         else:self.ready_since=None
         self.localization_ready=self.ready_since is not None and now-self.ready_since>=2.
+        safety=self.safety_snapshot(now)
+        if self.phase in ('NAVIGATING','EXECUTING','NAV_STARTING','PREPARING_NAV','WAITING_JEV','DECIDING') and safety['status'] not in ('CLEAR','SLOW'):
+            self.safety_wait_started=now
+            self.halt('SAFETY_WAIT','Obstacle safety: '+safety.get('reason','Motion blocked'))
+            self.owner_pub.publish(String(data='NONE'))
+            return
+        if self.phase=='SAFETY_WAIT':
+            if self.safety_wait_started is None:self.safety_wait_started=now
+            if safety['status'] in ('CLEAR','SLOW') and not safety.get('latched'):
+                self.set_phase('DECIDING','Obstacle cleared; asking Jev to reassess')
+            elif now-self.safety_wait_started>float(self.get_parameter('safety_blocked_timeout').value):
+                self.halt('HELP','Obstacle safety requires operator assistance: '+safety.get('reason','Blocked'))
+            return
         if self.phase in ('IDLE','HELP','STOPPED','SUCCEEDED','CANCELING'):return
         if now-self.started>float(self.get_parameter('mission_timeout').value):
             self.halt('HELP','Mission time budget exceeded'); return
@@ -548,7 +584,7 @@ class MissionNode(RecoveryNode):
         if now-self.last_ui<.3:return
         self.last_ui=now
         data=dict(phase=self.phase,seed=self.seed,goal=self.goal,pose=self.monitor.pose,
-            elapsed=now-self.started,health=state.to_dict(),owner=self.owner,reason=self.reason,
+            elapsed=now-self.started,health=state.to_dict(),safety=self.safety_snapshot(now),owner=self.owner,reason=self.reason,
             decision=self.decision,active_action=self.active_action,path=self.path,
             jev_calls=self.call_count,supervision=dict(enabled=True,interval_seconds=self.supervision_interval,
                 status=self.supervision_status if self.phase=='NAVIGATING' else 'INACTIVE',

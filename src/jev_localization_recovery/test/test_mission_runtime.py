@@ -20,6 +20,7 @@ def mission(monkeypatch):
     monkeypatch.setattr(module,'Dashboard',lambda *a:SimpleNamespace(snapshot='',close=lambda:None))
     rclpy.init(args=[],domain_id=196)
     node=MissionNode();node.emit=lambda *a,**k:None
+    node.safety_status=dict(status="CLEAR",reason="Test fixture",latched=False);node.safety_at=time.monotonic()
     node.publish_velocity=lambda *a:None
     node.owner_pub=SimpleNamespace(publish=lambda m:None)
     yield node
@@ -81,7 +82,9 @@ def test_expiring_velocity_owner_and_obstacle_gate():
     node=MissionBridge();sent=[]
     node.publisher=SimpleNamespace(publish=sent.append)
     try:
-        now=time.monotonic();node.scan_at=now;node.nearest=1.
+        now=time.monotonic();node.scan_at=node.odom_at=now
+        node.scan_stamp=node.odom_stamp=node.get_clock().now().nanoseconds*1e-9
+        node.points=[(3.,0.)];node.scan_fault=None
         nav=Twist();nav.linear.x=.1
         recovery=Twist();recovery.angular.z=.35
         node.on_owner(String(data='NAV'));node.store('NAV',nav);node.store('RECOVERY',recovery)
@@ -90,7 +93,7 @@ def test_expiring_velocity_owner_and_obstacle_gate():
         assert sent[-1].linear.x==0 and sent[-1].angular.z==0  # old commands flushed
         node.store('RECOVERY',recovery);node.relay();assert sent[-1].angular.z==.35
         node.owner_at=now-1;node.relay();assert sent[-1].angular.z==0
-        node.on_owner(String(data='NAV'));node.store('NAV',nav);node.nearest=.1
+        node.on_owner(String(data='NAV'));node.store('NAV',nav);node.points=[(.1,0.)]
         node.relay();assert sent[-1].linear.x==0
     finally:node.destroy_node();rclpy.shutdown()
 
@@ -228,6 +231,7 @@ def test_recovery_spin_finishes_on_sustained_lock(mission,monkeypatch,action):
     state=LocalizationState(status=Health.HEALTHY,data_ready=True,pose_uncertainty=.01,scan_map_score=.95,min_obstacle_distance=1.)
     for elapsed in (0.,1.,2.1):
         node.motion_sample=MotionSample(0,0,0,now+elapsed)
+        node.safety_at=now+elapsed  # fresh safety heartbeat for the simulated tick
         node.step_recovery(state,now+elapsed)
         if elapsed<2:assert node.phase=='EXECUTING'
     assert node.phase=='EVALUATING' and node.owner=='NONE'
@@ -242,6 +246,7 @@ def test_brief_or_weak_lock_does_not_finish_spin(mission,monkeypatch):
     state=LocalizationState(status=Health.HEALTHY,data_ready=True,pose_uncertainty=.01,scan_map_score=.95,min_obstacle_distance=1.)
     for elapsed,score in ((0,.95),(1,.7),(2.1,.95),(3.,.95)):
         state.scan_map_score=score;node.motion_sample=MotionSample(0,0,0,now+elapsed)
+        node.safety_at=now+elapsed  # fresh safety heartbeat for the simulated tick
         node.step_recovery(state,now+elapsed)
         assert node.phase=='EXECUTING' and node.actions.result is None
 
@@ -255,3 +260,70 @@ def test_local_target_twenty_percent_gate_before_action_event(mission,monkeypatc
     assert (node.phase=='EXECUTING') is accepted
     assert ('ACTION' in events) is accepted
     if not accepted:assert node.phase=='HELP' and 'local-target confidence' in node.reason
+
+
+def test_obstacle_event_aborts_recovery_and_waits(mission):
+    import json
+    from std_msgs.msg import String
+    mission.phase='EXECUTING';mission.owner='RECOVERY';mission.active_action='SPIN'
+    mission.on_safety(String(data=json.dumps(dict(status='BLOCKED',reason='Obstacle in path',latched=True))))
+    assert mission.phase=='SAFETY_WAIT' and mission.owner=='NONE'
+    assert mission.active_action=='NONE'
+
+
+def test_obstacle_event_cancels_nav_and_discards_review_epoch(mission):
+    import json
+    from std_msgs.msg import String
+    mission.phase='NAVIGATING';mission.owner='NAV';mission.nav_send=Future()
+    epoch=mission.nav_epoch
+    mission.on_safety(String(data=json.dumps(dict(status='BLOCKED',reason='Obstacle',latched=True))))
+    assert mission.phase=='CANCELING' and mission.next_phase=='SAFETY_WAIT'
+    assert mission.owner=='NONE' and mission.nav_epoch>epoch
+
+
+def test_safety_wait_has_no_requests_and_times_out(mission):
+    mission.phase='SAFETY_WAIT';now=time.monotonic()
+    mission.safety_wait_started=now-16
+    mission.safety_status=dict(status='BLOCKED',reason='Obstacle',latched=True)
+    before=mission.call_count
+    mission.step_recovery(LocalizationState(),now)
+    assert mission.phase=='HELP' and mission.call_count==before
+
+
+def test_clearance_returns_to_decision_without_motion(mission):
+    mission.phase='SAFETY_WAIT';mission.owner='NONE'
+    before=mission.call_count
+    mission.step_recovery(LocalizationState(),time.monotonic())
+    assert mission.phase=='DECIDING' and mission.owner=='NONE' and mission.call_count==before
+
+
+def test_stale_safety_telemetry_removes_motion_choices(mission):
+    mission.safety_at=0.;mission.localization_ready=True
+    allowed,targets=mission.available(LocalizationState(),time.monotonic())
+    assert allowed==['REQUEST_HELP','STOP'] and not targets
+
+
+def test_bridge_obstacle_stop_flushes_commands_before_release():
+    from jev_localization_recovery.mission_bridge import MissionBridge
+    from jev_localization_recovery.obstacle_safety import ObstacleSafety, SafetyConfig
+    from geometry_msgs.msg import Twist
+    from std_msgs.msg import String
+    rclpy.init(args=[],domain_id=195)
+    node=MissionBridge();sent=[];node.publisher=SimpleNamespace(publish=sent.append)
+    node.safety=ObstacleSafety(SafetyConfig(release_delay=.001))
+    try:
+        node.scan_at=node.odom_at=time.monotonic()
+        node.scan_stamp=node.odom_stamp=node.get_clock().now().nanoseconds*1e-9
+        node.scan_fault=None;node.points=[(.3,0.)]
+        msg=Twist();msg.linear.x=.15
+        node.on_owner(String(data='NAV'));node.store('NAV',msg);node.relay()
+        assert sent[-1].linear.x==0 and not node.commands
+        node.on_owner(String(data='NONE'));node.points=[(3.,0.)];node.relay()
+        time.sleep(.005);node.relay()
+        assert not node.safety.latched
+        node.on_owner(String(data='NAV'));node.relay()
+        assert sent[-1].linear.x==0  # no replay of the previously blocked request
+        node.store('NAV',msg);node.relay();assert sent[-1].linear.x==.15
+        node.odom_at=0.;node.relay()
+        assert sent[-1].linear.x==0 and node.safety.latched
+    finally:node.destroy_node();rclpy.shutdown()
