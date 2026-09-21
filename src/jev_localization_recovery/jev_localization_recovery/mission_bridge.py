@@ -26,10 +26,20 @@ class MissionBridge(GazeboSupport):
         self.odom_at=0.;self.measured=(0.,0.);self.odom_stamp=None
         self.safety_pub=self.create_publisher(String,'/demo/safety',10)
         self.create_subscription(String,'/demo/owner',self.on_owner,10)
+        self.create_subscription(String,'/demo/replan_ready',self.on_replan_ready,10)
         self.create_subscription(Twist,'/navigation/cmd_vel',lambda m:self.store('NAV',m),10)
         from rclpy.qos import qos_profile_sensor_data
         self.create_subscription(LaserScan,'/scan',self.scan,qos_profile_sensor_data)
         self.create_subscription(Odometry,'/odom',self.on_odom,qos_profile_sensor_data)
+
+    def on_replan_ready(self,msg):
+        # Discard only the old trajectory, never sensor faults or footprint checks.
+        # Subsequent commands still undergo the full independent envelope test.
+        now=time.monotonic()
+        if (msg.data=='CHECK_NEW_ROUTE' and self.owner=='NONE' and now-self.owner_at<.4 and
+                now-self.odom_at<self.safety.config.sensor_timeout and
+                abs(self.measured[0])<.01 and abs(self.measured[1])<.03):
+            self.commands.clear();self.safety.probe=(0.,0.);self.safety.clear_since=None
 
     def on_owner(self,msg):
         if msg.data!=self.owner:self.commands.clear()

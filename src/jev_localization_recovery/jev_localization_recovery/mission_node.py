@@ -15,7 +15,7 @@ from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from std_msgs.msg import String
 from std_srvs.srv import Trigger, Empty
 from nav_msgs.msg import Path as NavPath
-from nav2_msgs.action import NavigateToPose
+from nav2_msgs.action import NavigateToPose, ComputePathToPose, FollowPath
 from nav2_msgs.srv import ClearEntireCostmap
 from gazebo_msgs.srv import SetEntityState, GetEntityState
 from jev_demo_interfaces.srv import InjectDelocalization
@@ -68,6 +68,11 @@ class MissionNode(RecoveryNode):
         self.initial_pub=self.create_publisher(PoseWithCovarianceStamped,'/initialpose',10)
         self.create_subscription(NavPath,'/plan',lambda m:setattr(self,'path',[[p.pose.position.x,p.pose.position.y] for p in m.poses]),10)
         self.nav=ActionClient(self,NavigateToPose,'/navigate_to_pose')
+        self.planner=ActionClient(self,ComputePathToPose,'/compute_path_to_pose')
+        self.follower=ActionClient(self,FollowPath,'/follow_path')
+        self.replan_reset=self.create_publisher(String,'/demo/replan_ready',10)
+        self.replan_attempts=0;self.replan_limit=2;self.replan_result='Not requested'
+        self.blocked_review=False;self.blocked_decision=False;self.replanned_path=None
         self.clear_clients=[self.create_client(ClearEntireCostmap,name) for name in
             ('/global_costmap/clear_entirely_global_costmap','/local_costmap/clear_entirely_local_costmap')]
         self.set_entity=self.create_client(SetEntityState,'/set_entity_state')
@@ -89,8 +94,9 @@ class MissionNode(RecoveryNode):
         changed=(state.get('status'),state.get('reason'))!=(self.safety_status.get('status'),self.safety_status.get('reason'))
         self.safety_status=state;self.safety_at=time.monotonic()
         if changed:self.emit('SAFETY',**state)
-        if state['status'] in ('BLOCKED','SENSOR_FAULT') and self.phase in ('NAVIGATING','EXECUTING','NAV_STARTING','PREPARING_NAV','WAITING_JEV'):
+        if state['status'] in ('BLOCKED','SENSOR_FAULT') and not self.blocked_decision and self.phase in ('NAVIGATING','EXECUTING','NAV_STARTING','PREPARING_NAV','WAITING_JEV'):
             self.safety_wait_started=time.monotonic()
+            self.blocked_review=False
             self.halt('SAFETY_WAIT','Obstacle safety: '+state.get('reason','Motion blocked'))
             self.owner_pub.publish(String(data='NONE'))
 
@@ -173,6 +179,7 @@ class MissionNode(RecoveryNode):
         self.report=folder/('mission-{}-{}.jsonl'.format(seed,time.time_ns()))
         self.attempts={k:0 for k in self.attempts}; self.local_attempts=0; self.pause_count=0; self.nav_failures=0
         self.nav_started=False; self.ready_since=None; self.decision=None; self.injections.clear(); self.path=[]
+        self.replan_attempts=0;self.replan_result='Not requested';self.blocked_review=False;self.blocked_decision=False
         self.motion_history=MotionHistory(); self.worsened_while_moving=False
         req=SetEntityState.Request(); req.state.name='turtlebot3_burger'; req.state.reference_frame='world'
         req.state.pose.position.x,req.state.pose.position.y=start[:2]; req.state.pose.position.z=.01
@@ -187,7 +194,9 @@ class MissionNode(RecoveryNode):
 
     def halt(self,next_phase,reason):
         self.nav_epoch+=1; self.supervision_status='INACTIVE'
+        self.blocked_decision=False
         self.owner='NONE'; self.publish_velocity(0.,0.)
+        self.owner_pub.publish(String(data='NONE'))
         self.actions.stop(reason)
         self.active_action='NONE'; self.reason=reason
         self.next_phase=next_phase; self.cancel_started=time.monotonic(); self.cancel_future=None
@@ -223,9 +232,77 @@ class MissionNode(RecoveryNode):
                                 r*math.sin(self.scan.angle_min+i*self.scan.angle_increment),laser)
                 for i,r in enumerate(self.scan.ranges) if math.isfinite(r) and self.scan.range_min<=r<self.scan.range_max]
 
+    def can_replan(self,now):
+        safety=self.safety_snapshot(now)
+        return (self.nav_started and self.goal is not None and self.localization_ready and
+                safety['status'] in ('CLEAR','SLOW','BLOCKED') and
+                self.replan_attempts<self.replan_limit and self.planner.server_is_ready() and
+                self.follower.server_is_ready())
+
+    def navigation_choices(self,now):
+        result=['CONTINUE_NAVIGATION','PAUSE_NAVIGATION','REQUEST_HELP','STOP']
+        if self.can_replan(now):result.append('REPLAN_PATH')
+        return result
+
+    def begin_replan(self,now):
+        self.replan_attempts+=1;self.replan_result='Planning with current obstacle costmap'
+        self.blocked_decision=False
+        self.halt('REPLAN_START','Jev requested a new route to the same destination')
+        self.active_action='REPLAN_PATH'
+        self.stage_started=now
+        self.emit('REPLAN_REQUEST',attempt=self.replan_attempts,goal=self.goal)
+
+    def step_replan(self,state,now):
+        if not self.localization_ready or self.safety_snapshot(now)['status']=='SENSOR_FAULT':
+            self.replan_result='Rejected: localization or sensors unavailable'
+            self.halt('HELP',self.replan_result);return
+        if self.phase=='REPLAN_START':
+            goal=ComputePathToPose.Goal();goal.goal=self.goal_message();goal.planner_id='GridBased';goal.use_start=False
+            self.nav_send=self.planner.send_goal_async(goal);self.stage_started=now
+            self.set_phase('REPLANNING','Computing a route while motion is disabled')
+        elif self.phase=='REPLANNING':
+            if self.nav_result and self.nav_result.done():
+                try:response=self.nav_result.result();path=response.result.path
+                except Exception:
+                    self.halt('HELP','Planner result unavailable');return
+                self.nav_result=self.nav_handle=None
+                points=[(p.pose.position.x,p.pose.position.y) for p in path.poses]
+                valid=(response.status==4 and path.header.frame_id=='map' and len(points)>=2 and
+                       all(math.isfinite(v) for xy in points for v in xy) and
+                       all(p.header.frame_id in ('','map') and all(math.isfinite(v) for v in
+                           (p.pose.position.z,p.pose.orientation.x,p.pose.orientation.y,p.pose.orientation.z,p.pose.orientation.w)) and
+                           .9<sum(v*v for v in (p.pose.orientation.x,p.pose.orientation.y,p.pose.orientation.z,p.pose.orientation.w))<1.1
+                           for p in path.poses) and
+                       math.dist(points[-1],self.goal[:2])<=.3 and self.monitor.pose is not None and
+                       math.dist(points[0],self.monitor.pose[:2])<=.5 and
+                       all(math.dist(a,b)<=.5 for a,b in zip(points,points[1:])))
+                if not valid:
+                    self.replan_result='No valid replacement route';self.emit('REPLAN_RESULT',success=False,reason=self.replan_result)
+                    self.halt('HELP',self.replan_result);return
+                self.replanned_path=path;self.path=[list(xy) for xy in points]
+                self.replan_result='Route found; waiting for independent safety clearance'
+                self.emit('REPLAN_RESULT',success=True,attempt=self.replan_attempts,points=len(points))
+                self.replan_reset.publish(String(data='CHECK_NEW_ROUTE'))
+                self.stage_started=now;self.set_phase('REPLAN_READY',self.replan_result)
+            elif now-self.stage_started>8:self.halt('HELP','Replanning timed out')
+        elif self.phase=='REPLAN_READY':
+            safety=self.safety_snapshot(now)
+            if now-self.stage_started>1.2 and safety['status'] in ('CLEAR','SLOW') and not safety.get('latched'):
+                goal=FollowPath.Goal();goal.path=self.replanned_path;goal.controller_id='FollowPath';goal.goal_checker_id='general_goal_checker'
+                self.nav_epoch+=1;self.nav_feedback={};self.nav_feedback_at=None;self.telemetry_history.clear()
+                self.last_review_at=None;self.next_supervision_at=now
+                epoch=self.nav_epoch
+                self.nav_send=self.follower.send_goal_async(goal,feedback_callback=lambda msg:self.on_path_feedback(msg,epoch))
+                self.stage_started=now;self.replan_result='Following replacement route'
+                self.set_phase('NAV_STARTING',self.replan_result)
+            elif now-self.stage_started>5:self.halt('HELP','New route exists but safe departure is unavailable')
+
     def available(self,state,now):
         allowed=['REQUEST_HELP','STOP']; targets={}
-        if self.safety_snapshot(now)['status'] not in ('CLEAR','SLOW'):return allowed,targets
+        if self.blocked_decision or self.safety_snapshot(now)['status'] not in ('CLEAR','SLOW'):
+            if self.can_replan(now):allowed+=['REPLAN_PATH','PAUSE_NAVIGATION']
+            return allowed,targets
+        if self.can_replan(now):allowed.append('REPLAN_PATH')
         if self.localization_ready:
             if self.nav.server_is_ready(): allowed.insert(0,'RESUME_NAVIGATION' if self.nav_started else 'NAVIGATE_TO_GOAL')
             if self.pause_count<2: allowed.append('PAUSE_NAVIGATION')
@@ -255,7 +332,7 @@ class MissionNode(RecoveryNode):
         allowed,targets=self.available(state,now)
         context=dict(robot=state.to_dict(),safety=self.safety_snapshot(now),mission=dict(goal=self.goal,navigation_started=self.nav_started,
             navigation_failures=self.nav_failures,local_move_attempts=self.local_attempts),
-            localization_ready=self.localization_ready,last_outcome=self.reason,
+            localization_ready=self.localization_ready,replanning=dict(attempts=self.replan_attempts,limit=self.replan_limit,result=self.replan_result),last_outcome=self.reason,
             allowed_actions=allowed,local_targets=targets)
         payload=self.mission_selector.make_payload(context,allowed,targets)
         self.call_count+=1
@@ -280,6 +357,10 @@ class MissionNode(RecoveryNode):
                 action,decision['confidence'],self.p['jev_min_confidence'])
             self.emit('VETO',action=action,reason=reason,confidence=decision['confidence'],threshold=self.p['jev_min_confidence'])
             self.halt('HELP',reason);return
+        if action=='REPLAN_PATH':self.begin_replan(now);return
+        if self.blocked_decision:
+            self.blocked_decision=False
+            if action=='PAUSE_NAVIGATION':self.set_phase('SAFETY_WAIT','Jev chose to wait for obstacle clearance');return
         if action=='MOVE_LOCAL':
             if decision.get('target_confidence',0)<self.p['jev_min_confidence']:
                 reason='Jev local-target confidence {:.2f} is below {:.2f}'.format(
@@ -312,6 +393,13 @@ class MissionNode(RecoveryNode):
             self.attempts[key]+=1
             self.actions.start(action,state,self.motion_sample,now)
         self.set_phase('EXECUTING','Executing '+action)
+
+    def on_path_feedback(self,msg,epoch):
+        if epoch!=self.nav_epoch:return
+        feedback=msg.feedback
+        values=dict(distance_remaining_m=float(feedback.distance_to_goal),speed_mps=float(feedback.speed))
+        self.nav_feedback={k:v for k,v in values.items() if math.isfinite(v)}
+        self.nav_feedback_at=time.monotonic()
 
     def on_nav_feedback(self,msg,epoch):
         if epoch!=self.nav_epoch or self.phase not in ('NAV_STARTING','NAVIGATING'):return
@@ -346,15 +434,16 @@ class MissionNode(RecoveryNode):
 
     def apply_navigation_review(self,decision,state,now):
         action=decision['action'];self.decision=decision;self.last_review_at=now
-        allowed=('CONTINUE_NAVIGATION','PAUSE_NAVIGATION','REQUEST_HELP','STOP')
+        allowed=self.navigation_choices(now)
         if action not in allowed:
             reason='{} is not allowed during navigation supervision'.format(action)
             self.emit('VETO',action=action,reason=reason,allowed_actions=allowed)
             self.halt('HELP',reason);return
-        if action=='CONTINUE_NAVIGATION' and decision['confidence']<self.p['jev_min_confidence']:
+        if action in ('CONTINUE_NAVIGATION','REPLAN_PATH') and decision['confidence']<self.p['jev_min_confidence']:
             reason='Jev continuation confidence {:.2f} is below {:.2f}'.format(decision['confidence'],self.p['jev_min_confidence'])
             self.emit('VETO',action=action,reason=reason)
             self.halt('HELP',reason);return
+        if action=='REPLAN_PATH':self.begin_replan(now);return
         if action=='CONTINUE_NAVIGATION':
             if not state.data_ready or state.status!=Health.HEALTHY:
                 self.halt('DECIDING','Localization changed before Jev continuation could be applied');return
@@ -399,9 +488,10 @@ class MissionNode(RecoveryNode):
             self.supervision_status='BACKPRESSURE';return
         if self.pending is not None and not self.pending.done():return
         context=dict(mode='NAVIGATION_SUPERVISION',robot=state.to_dict(),navigation=telemetry,
-            mission=dict(goal=self.goal,navigation_started=True,navigation_failures=self.nav_failures),
+            mission=dict(goal=self.goal,navigation_started=True,navigation_failures=self.nav_failures,
+                         replan_attempts=self.replan_attempts,replan_limit=self.replan_limit,replan_result=self.replan_result),
             localization_ready=self.localization_ready)
-        allowed=['CONTINUE_NAVIGATION','PAUSE_NAVIGATION','REQUEST_HELP','STOP']
+        allowed=self.navigation_choices(now)
         payload=self.mission_selector.make_payload(context,allowed,{})
         self.call_count+=1;self.supervision_calls+=1;call_id=self.call_count
         self.last_supervision_started=now;self.supervision_status='REVIEW_PENDING'
@@ -466,14 +556,21 @@ class MissionNode(RecoveryNode):
         else:self.ready_since=None
         self.localization_ready=self.ready_since is not None and now-self.ready_since>=2.
         safety=self.safety_snapshot(now)
-        if self.phase in ('NAVIGATING','EXECUTING','NAV_STARTING','PREPARING_NAV','WAITING_JEV','DECIDING') and safety['status'] not in ('CLEAR','SLOW'):
+        if self.phase in ('NAVIGATING','EXECUTING','NAV_STARTING','PREPARING_NAV','WAITING_JEV','DECIDING') and safety['status'] not in ('CLEAR','SLOW') and not self.blocked_decision:
             self.safety_wait_started=now
             self.halt('SAFETY_WAIT','Obstacle safety: '+safety.get('reason','Motion blocked'))
             self.owner_pub.publish(String(data='NONE'))
             return
+        if self.phase in ('REPLAN_START','REPLANNING','REPLAN_READY'):
+            self.step_replan(state,now);return
         if self.phase=='SAFETY_WAIT':
             if self.safety_wait_started is None:self.safety_wait_started=now
+            if not self.blocked_review and self.can_replan(now) and now-self.safety_wait_started<15:
+                self.blocked_decision=True;self.request_decision(state,now)
+                if self.phase=='WAITING_JEV':self.blocked_review=True
+                return
             if safety['status'] in ('CLEAR','SLOW') and not safety.get('latched'):
+                self.blocked_decision=False
                 self.set_phase('DECIDING','Obstacle cleared; asking Jev to reassess')
             elif now-self.safety_wait_started>float(self.get_parameter('safety_blocked_timeout').value):
                 self.halt('HELP','Obstacle safety requires operator assistance: '+safety.get('reason','Blocked'))
@@ -507,7 +604,8 @@ class MissionNode(RecoveryNode):
                 self.emit('JEV_RESPONSE',response=body,latency_ms=round((now-self.request_started)*1000),decision=decision)
                 if self.request_state!=(state.status,self.localization_ready):
                     self.emit('DISCARDED',reason='Localization changed while Jev was deciding')
-                    self.set_phase('DECIDING','Reassessing changed evidence');return
+                    self.blocked_decision=False
+                    self.set_phase('SAFETY_WAIT' if safety['status']=='BLOCKED' else 'DECIDING','Reassessing changed evidence');return
                 self.execute(decision,state,now)
         elif self.phase=='PREPARING_NAV':
             if all(f.done() for f in self.clear_futures):
@@ -586,13 +684,14 @@ class MissionNode(RecoveryNode):
         data=dict(phase=self.phase,seed=self.seed,goal=self.goal,pose=self.monitor.pose,
             elapsed=now-self.started,health=state.to_dict(),safety=self.safety_snapshot(now),owner=self.owner,reason=self.reason,
             decision=self.decision,active_action=self.active_action,path=self.path,
+            replanning=dict(attempts=self.replan_attempts,limit=self.replan_limit,result=self.replan_result),
             jev_calls=self.call_count,supervision=dict(enabled=True,interval_seconds=self.supervision_interval,
                 status=self.supervision_status if self.phase=='NAVIGATING' else 'INACTIVE',
                 calls=self.supervision_calls,pending=bool(self.reviews_inflight()),inflight=self.reviews_inflight(),
                 target_hz=1/self.supervision_interval,observed_request_hz=sum(t>=now-5 for t in self.request_times)/5.,
                 last_review_age_seconds=now-self.last_review_at if self.last_review_at else None))
         if self.phase=='NAVIGATING':
-            allowed=['CONTINUE_NAVIGATION','PAUSE_NAVIGATION','REQUEST_HELP','STOP']
+            allowed=self.navigation_choices(now)
         elif self.phase in ('DECIDING','WAITING_JEV','PAUSED','EVALUATING'):
             allowed,_=self.available(state,now)
         else:allowed=['STOP','REQUEST_HELP']
