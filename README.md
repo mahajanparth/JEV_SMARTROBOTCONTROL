@@ -315,8 +315,11 @@ The dashboard shows its probability when offered, attempt count, result, and rou
 
 ## Live safety tuning and help acknowledgment
 
-Click **Tune safety settings** in the control panel's Obstacle safety section to
-open a separate small window, or open [Safety tuning](http://localhost:8765/safety).
+Select **Safety settings** in the control panel tabs, or click **Tune safety settings**
+in the Obstacle safety section. You can also open [the safety tab](http://localhost:8765/#safety).
+Switch back to **Mission control** to view the map and Jev decisions. Mission status
+and stop controls stay visible above both tabs; switching preserves unsaved edits.
+The old `/safety` address redirects to the safety tab.
 It displays the active values reported by the bridge alongside editable values:
 
 | Setting | Units | Allowed range |
@@ -335,7 +338,7 @@ The server also checks that no goal or update is pending. The bridge independent
 requires fresh stopped odometry and owner NONE. Updates are applied atomically;
 an invalid value rejects the whole update. Applied changes discard old commands
 and trigger a fresh clearance check. **Reload active values** discards unsaved
-edits in the window. Changes last only for the current session; edit
+edits in the settings tab. Changes last only for the current session; edit
 `config/obstacle_safety.yaml` for defaults used on restart.
 
 Increasing assumed braking strength shortens the stopping envelope; increasing

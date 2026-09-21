@@ -149,3 +149,10 @@ configuration. All eight default values were restored, and safety returned CLEAR
 The separate page rendered eight editable fields and active values in Chrome;
 Apply was disabled when the mission became active. The help-loop fix has automated
 regression coverage; a complete live help/acknowledge/resume cycle remains unverified.
+
+## Integrated safety settings tab
+
+The control panel now contains Mission control and Safety settings tabs with
+keyboard navigation and hash links. Browser verification confirmed eight settings
+inputs, live active values, and correct panel visibility on the safety tab. The
+settings use the existing stopped-only update endpoint; backend behavior is unchanged.
