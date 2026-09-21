@@ -89,6 +89,15 @@ function jevActivity(s){
  };
  return stages[s.phase]||['Waiting for mission status',''];
 }
+// Normalize displayed text only; preserve original telemetry and recorded API data.
+function cleanPanelText(){
+ const walker=document.createTreeWalker(document.querySelector('main'),NodeFilter.SHOW_TEXT);
+ const dash=String.fromCodePoint(8212);
+ while(walker.nextNode()){
+  const node=walker.currentNode;
+  if(node.nodeValue.includes(dash))node.nodeValue=node.nodeValue.split(dash).join(' - ');
+ }
+}
 let lastTimeline='';
 async function refresh(){
  try{
@@ -110,6 +119,7 @@ async function refresh(){
   const timeline=JSON.stringify(events.slice(-60));
   if(timeline!==lastTimeline){const open=new Set([...$('timeline').querySelectorAll('details[open]')].map(d=>d.dataset.key));lastTimeline=timeline;$('timeline').replaceChildren(...events.slice(-60).reverse().map(e=>{const d=document.createElement('details'),h=document.createElement('summary'),p=document.createElement('pre');d.dataset.key=[e.time,e.event,e.call_id].join(':');d.open=open.has(d.dataset.key);h.textContent=`${e.time?.toFixed(1)}s · ${e.event} · ${e.action||e.reason||''}`;p.textContent=pretty(e);d.append(h,p);return d}))}draw(s);
  }catch(e){$('connection').textContent='Disconnected: displayed data may be stale';document.querySelectorAll('button').forEach(b=>b.disabled=true)}
+ cleanPanelText();
  setTimeout(refresh,500);
 }refresh();
 </script></body></html>
