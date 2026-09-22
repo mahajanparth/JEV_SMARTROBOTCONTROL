@@ -175,6 +175,138 @@ localization: fresh data, healthy status, uncertainty below **0.35**, and scan/m
 agreement at least **0.85**. A HEALTHY label alone does not meet this stricter
 condition. The robot then stops for the normal four-second recovery evaluation.
 
+## State sent to Jev and its response
+
+Jev receives localization evidence, obstacle safety, mission progress, and the
+actions currently available. The [mission coordinator](src/jev_localization_recovery/jev_localization_recovery/mission_node.py)
+builds this context; the [Jev selector](src/jev_localization_recovery/jev_localization_recovery/mission_policy.py)
+wraps it in a request with three fields:
+
+| Request field | Contents |
+| --- | --- |
+| `model` | `jev-latest`, the configured model alias |
+| `state` | A **JSON-encoded string** containing the decision context shown below |
+| `questions` | An `action` choice question with instructions and a `criteria` entry for each offered action; a `target` choice question when safe local targets are available |
+
+### Example state
+
+This is a decoded, shortened state from a recorded seed **51** experiment, about
+**3.31 seconds** after startup. Numbers are rounded and some safety details are
+omitted for readability. AMCL is still locating the robot, motion is stopped,
+and a spin is available to gather observations.
+
+```json
+{
+  "robot": {
+    "status": "LOST",
+    "data_ready": true,
+    "pose_uncertainty": 23.43,
+    "scan_map_score": 0.158,
+    "pose_jump_distance": 0.771,
+    "pose_jump_yaw": 0.353,
+    "min_obstacle_distance": 0.813,
+    "rear_clearance": 0.968,
+    "spin_attempts": 0,
+    "global_relocalization_attempts": 0,
+    "backtrack_attempts": 0,
+    "worsened_while_moving": false,
+    "backtrack_available": false,
+    "global_service_available": true,
+    "reason": "Severe covariance (one signal only)"
+  },
+  "safety": {
+    "status": "CLEAR",
+    "reason": "Swept footprint clear",
+    "clearance_m": 0.578,
+    "owner": "NONE",
+    "requested": [0.0, 0.0],
+    "applied": [0.0, 0.0],
+    "latched": false
+  },
+  "mission": {
+    "goal": [10.475, 2.225, 0.0],
+    "navigation_started": false,
+    "navigation_failures": 0,
+    "local_move_attempts": 0
+  },
+  "localization_ready": false,
+  "replanning": {
+    "attempts": 0,
+    "limit": 2,
+    "result": "Not requested"
+  },
+  "last_outcome": "Initial localization observations ready",
+  "allowed_actions": ["REQUEST_HELP", "STOP", "SPIN"],
+  "local_targets": {}
+}
+```
+
+`pose_uncertainty` is a covariance-based metric; `scan_map_score` measures scan/map
+agreement from 0 to 1. `data_ready` means the required evidence is available;
+`localization_ready` applies the stricter stable-localization gate for navigation.
+The goal is `[x, y, yaw]` in the map frame, in metres and radians. Requested and
+applied velocities are `[linear_mps, angular_radps]`. The full safety snapshot
+also includes sensor ages, measured velocity, and active safety parameters.
+The simulator's true robot pose and API key are not included in this state.
+
+During navigation, the context instead includes `mode: "NAVIGATION_SUPERVISION"`
+and a `navigation` object with estimated pose, velocity, safety, goal distance,
+route deviation, Nav2 feedback, motion owner, and recent telemetry samples.
+The offered actions are in `questions.action.criteria` for both request types;
+the extra `allowed_actions` field above belongs to mission-decision state.
+
+### Example Jev response
+
+The same recorded request returned this structured response:
+
+```json
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "action": {
+      "type": "choice",
+      "choice": "SPIN",
+      "confidence": 0.76,
+      "probabilities": {
+        "STOP": 0.01,
+        "SPIN": 0.84,
+        "REQUEST_HELP": 0.15
+      }
+    }
+  },
+  "usage": {
+    "input_tokens": 1309,
+    "output_tokens": 41
+  }
+}
+```
+
+Jev selected **SPIN**, assigning it **84% probability** and reporting **76% model
+confidence**. These are separate fields. The returned `model` identifies the
+version used for this recorded call. The application separately logged
+`latency_ms: 502`; latency is event metadata, not part of the response above.
+
+The controller reads `answers.action.choice`, validates the response, and rechecks
+current action availability and execution limits before moving. A choice is not a
+motor command. If Jev selects `MOVE_LOCAL`, it must also return `answers.target`
+with a target choice, confidence, and probabilities. The controller maps that
+choice to one of the offered robot-relative coordinates and checks it again.
+
+### Inspect the live state and exchange
+
+The control panel's request, response, and event timeline show actual exchanges.
+To inspect the dashboard snapshot while the experiment is running:
+
+```bash
+curl -fsS http://localhost:8765/api/state | python3 -m json.tool
+```
+
+This snapshot includes `phase`, `owner`, `goal`, `pose`, `health`, `safety`,
+`decision`, `events`, and `map`. It is the broader UI state, while the Jev request
+contains the decision context described above. In `events`, `JEV_REQUEST.request`
+contains the outgoing payload and `JEV_RESPONSE.response` contains the returned
+body; `JEV_RESPONSE.decision` is the controller's parsed decision.
+
 ## Obstacle safety
 
 All navigation and recovery commands pass through a shared 20 Hz obstacle filter.
