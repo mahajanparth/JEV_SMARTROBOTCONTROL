@@ -26,3 +26,6 @@ log_mission/
 *.log
 docs/mission-runs/*.jsonl
 docs/mission-runs/*.spawn.json
+
+# Remotion video project: node_modules and rendered output are far too large to track.
+mission1-video/

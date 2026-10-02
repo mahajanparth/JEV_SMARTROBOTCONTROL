@@ -10,6 +10,17 @@ Start here for the current mission experiment. Detailed behavior is in the
 [mission guide](docs/mission-demo.md); earlier experiments are documented separately in
 [recovery-only instructions](docs/recovery-only.md).
 
+## Mission walkthrough
+
+A complete run, end to end: the TurtleBot3 spawns at a random pose in the house,
+localizes with AMCL, and Jev selects mission and recovery actions while Nav2 drives
+to a random destination. The dashboard tracks each decision as it happens.
+
+<video src="https://raw.githubusercontent.com/mahajanparth/JEV_SMARTROBOTCONTROL/main/docs/videos/mission-walkthrough.mp4" controls muted width="100%"></video>
+
+If the player above does not load, watch
+[the recording directly](docs/videos/mission-walkthrough.mp4) (2m23s, 1080p).
+
 ## Experiment screenshots
 
 The experiment combines a browser control panel, a Gazebo simulation, and RViz
