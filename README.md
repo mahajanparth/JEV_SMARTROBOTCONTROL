@@ -16,10 +16,11 @@ A complete run, end to end: the TurtleBot3 spawns at a random pose in the house,
 localizes with AMCL, and Jev selects mission and recovery actions while Nav2 drives
 to a random destination. The dashboard tracks each decision as it happens.
 
-<video src="https://raw.githubusercontent.com/mahajanparth/JEV_SMARTROBOTCONTROL/main/docs/videos/mission-walkthrough.mp4" controls muted width="100%"></video>
+[![Mission walkthrough showing Gazebo, RViz, and the Jev dashboard during a full house mission](docs/images/mission-walkthrough-poster.png)](https://github.com/mahajanparth/JEV_SMARTROBOTCONTROL/blob/main/docs/videos/mission-walkthrough.mp4)
 
-If the player above does not load, watch
-[the recording directly](docs/videos/mission-walkthrough.mp4) (2m23s, 1080p).
+Click the image to play the recording on GitHub (2m23s, 1080p), or
+[download it directly](docs/videos/mission-walkthrough.mp4). The video is stored with
+Git LFS, so cloning the repository needs `git-lfs` installed to fetch it.
 
 ## Experiment screenshots
 
